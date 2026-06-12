@@ -50,9 +50,9 @@ def main():
 
     if outpath is None:
         if project=="sbi":
-            outpath = "/uscms_data/d3/honor/Outputs_sbi/pretraining"
+            outpath = "/uscms_data/d3/ywkao/Outputs_sbi/pretraining"
         elif project=="dctr":
-            outpath = "/uscms_data/d3/honor/Outputs_nlo/pretraining"
+            outpath = "/uscms_data/d3/ywkao/Outputs_nlo/pretraining"
     if executor=="debug":
         outpath = os.path.join(outpath, "testing")
         
@@ -104,8 +104,7 @@ def main():
     else:
         print('Processor to run not understood.')
         return 1
-    output = runner(fileset, processor_instance, treename)
-    #note that coffea 0.7 vs 2025 have different orderings for runner args
+    output = runner(fileset, processor_instance, treename=treename)
 
     # PRINT processing stats
     dt = time.time() - tstart
