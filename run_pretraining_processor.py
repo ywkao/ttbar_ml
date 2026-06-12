@@ -33,7 +33,10 @@ def main():
     parser.add_argument('--validation', '-v', action="store_true", default=False, help='Should files be saved for validation?')
     # ARGUMENTS FOR SBI RUNNING
     parser.add_argument('--runFit', '-f', action="store_true", help='Run own fitting for structure coefficients')
-    
+    parser.add_argument('--file-start', type=int, default=None, help='Index of first file to process (for batching)')
+    parser.add_argument('--file-end',   type=int, default=None, help='Index of last file to process (exclusive, for batching)')
+    parser.add_argument('--batch-id',   type=int, default=None, help='Batch index; saves raw tensors instead of train/test/val split')
+
     args        = parser.parse_args()
     project     = args.project
     jsonFile    = args.jsonFile
@@ -64,6 +67,10 @@ def main():
     # PREPARE THE FILESET
     fileset = uFiles.construct_fileset([jsonFile], prefix=prefix)
     if executor=="debug": fileset = {list(fileset.keys())[0]: fileset[list(fileset.keys())[0]][:5]}
+    if args.file_start is not None or args.file_end is not None:
+        dataset_name = list(fileset.keys())[0]
+        flist = fileset[dataset_name]
+        fileset = {dataset_name: flist[args.file_start:args.file_end]}
     # TODO: CHECK THAT ALL .ROOT HAVE THE SAME WC LIST
     if args.rwgtcard is not None:
         #TODO: if idx is list, check that the weights for each idx are the same (aka are all truly SM)
@@ -119,19 +126,25 @@ def main():
         from torch import save, seed, float64
         from torch.utils.data import random_split, TensorDataset
 
-        # Split samples
-        train, test, val = random_split(TensorDataset(output['features'].get(), output['fit_coefs'].get()), [0.8, 0.1, 0.1])
-        # Save the outputs
         print(f"\nSaving output in {outpath} ...")
-        save(TensorDataset(train[:][0], train[:][1]), os.path.join(outpath,"train.p"))
-        save(TensorDataset(test[:][0],  test[:][1]),  os.path.join(outpath,"test.p"))
-        save(TensorDataset(val[:][0],   val[:][1]),   os.path.join(outpath,"validation.p"))
-        
-        output['metadata']['seed'] = seed()
-        output['metadata']['nTrain'] = train[:][0].shape[0]
-        output['metadata']['nTest']  = test[:][0].shape[0]
-        output['metadata']['nVal']   = val[:][0].shape[0]
-        util.save(output['metadata'], os.path.join(outpath,"metadata.coffea"))
+        if args.batch_id is not None:
+            # Batch mode: save raw tensors for later merging
+            batch_file = os.path.join(outpath, f"batch_{args.batch_id:03d}.p")
+            save(TensorDataset(output['features'].get(), output['fit_coefs'].get()), batch_file)
+            output['metadata']['nEvents'] = output['features'].get().shape[0]
+            util.save(output['metadata'], os.path.join(outpath, f"metadata_batch_{args.batch_id:03d}.coffea"))
+            print(f"Saved batch {args.batch_id} -> {batch_file}")
+        else:
+            # Single-run mode: split and save directly
+            train, test, val = random_split(TensorDataset(output['features'].get(), output['fit_coefs'].get()), [0.8, 0.1, 0.1])
+            save(TensorDataset(train[:][0], train[:][1]), os.path.join(outpath,"train.p"))
+            save(TensorDataset(test[:][0],  test[:][1]),  os.path.join(outpath,"test.p"))
+            save(TensorDataset(val[:][0],   val[:][1]),   os.path.join(outpath,"validation.p"))
+            output['metadata']['seed'] = seed()
+            output['metadata']['nTrain'] = train[:][0].shape[0]
+            output['metadata']['nTest']  = test[:][0].shape[0]
+            output['metadata']['nVal']   = val[:][0].shape[0]
+            util.save(output['metadata'], os.path.join(outpath,"metadata.coffea"))
     elif project == "dctr":
         import cloudpickle
         import gzip

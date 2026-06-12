@@ -1,0 +1,32 @@
+universe              = vanilla
+executable            = run_batch.sh
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT
+transfer_input_files  = run_batch.sh
+
+x509userproxy = $ENV(X509_USER_PROXY)
+
+request_cpus   = 4
+request_memory = 8192
+request_disk   = 20480
+
+output = logs/batch_$(batch_id).out
+error  = logs/batch_$(batch_id).err
+log    = logs/pretraining.log
+
++ProjectName = "cms.org.fnal"
+
+arguments = $(batch_id) $(file_start) $(file_end)
+
+queue batch_id,file_start,file_end from (
+0     0    50
+1    50   100
+2   100   150
+3   150   200
+4   200   250
+5   250   300
+6   300   350
+7   350   400
+8   400   450
+9   450   496
+)
