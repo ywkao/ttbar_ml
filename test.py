@@ -104,34 +104,93 @@ FEATURE_NAMES = [
     'jet1_pt','jet1_eta','jet1_phi','jet1_mass',
     'jet2_pt','jet2_eta','jet2_phi','jet2_mass',
     'jet3_pt','jet3_eta','jet3_phi','jet3_mass',
-    'njets','HT',
+    'njets','HT','mT_W',
     'jet0_flav','jet1_flav','jet2_flav','jet3_flav',
     'lep_top_pt','lep_top_eta','lep_top_phi','lep_top_mass',
     'had_top_pt','had_top_eta','had_top_phi','had_top_mass',
+    'dr_tt','dr_lep_had','m_ttbar','cos_theta_star',
 ]
 
 gp = events.GenPart[mask]
 is_final = gp.hasFlags(["fromHardProcess", "isLastCopy"])
-t    = ak.fill_none(ak.pad_none(gp[is_final & (gp.pdgId ==  6)], 1)[:, 0].pt, 0.)
-tbar = ak.fill_none(ak.pad_none(gp[is_final & (gp.pdgId == -6)], 1)[:, 0].pt, 0.)
+t_gp    = ak.pad_none(gp[is_final & (gp.pdgId ==  6)], 1)[:, 0]
+tbar_gp = ak.pad_none(gp[is_final & (gp.pdgId == -6)], 1)[:, 0]
+
+def to_np(arr):
+    return ak.to_numpy(ak.fill_none(arr, 0.)).astype(float)
+
+t_pt   = to_np(t_gp.pt);   t_eta  = to_np(t_gp.eta)
+t_phi  = to_np(t_gp.phi);  t_mass = to_np(t_gp.mass)
+tb_pt  = to_np(tbar_gp.pt);  tb_eta = to_np(tbar_gp.eta)
+tb_phi = to_np(tbar_gp.phi); tb_mass = to_np(tbar_gp.mass)
+
+t_px  = t_pt  * np.cos(t_phi);   t_py  = t_pt  * np.sin(t_phi)
+t_pz  = t_pt  * np.sinh(t_eta);  t_e   = np.sqrt(t_px**2 + t_py**2 + t_pz**2 + t_mass**2)
+tb_px = tb_pt * np.cos(tb_phi);  tb_py = tb_pt * np.sin(tb_phi)
+tb_pz = tb_pt * np.sinh(tb_eta); tb_e  = np.sqrt(tb_px**2 + tb_py**2 + tb_pz**2 + tb_mass**2)
+sys_px = t_px + tb_px;  sys_py = t_py + tb_py
+sys_pz = t_pz + tb_pz;  sys_e  = t_e  + tb_e
+
+lep_phi_np = ak.to_numpy(leps.phi).astype(float)
+met_pt_np  = ak.to_numpy(met.pt).astype(float)
+met_phi_np = ak.to_numpy(met.phi).astype(float)
+mT_W = np.sqrt(2 * ak.to_numpy(leps.pt).astype(float) * met_pt_np
+               * (1 - np.cos(lep_phi_np - met_phi_np)))
+
+m_ttbar = np.sqrt(np.maximum(sys_e**2 - sys_px**2 - sys_py**2 - sys_pz**2, 0.))
+
+deta_tt = t_eta - tb_eta
+dphi_tt = np.arctan2(np.sin(t_phi - tb_phi), np.cos(t_phi - tb_phi))
+dr_tt   = np.sqrt(deta_tt**2 + dphi_tt**2)
+
+lep_is_neg  = ak.to_numpy(leps.pdgId > 0)
+had_top_eta = np.where(lep_is_neg, t_eta,  tb_eta)
+had_top_phi = np.where(lep_is_neg, t_phi,  tb_phi)
+lep_eta_np  = ak.to_numpy(leps.eta).astype(float)
+deta_lh    = lep_eta_np - had_top_eta
+dphi_lh    = np.arctan2(np.sin(lep_phi_np - had_top_phi), np.cos(lep_phi_np - had_top_phi))
+dr_lep_had = np.sqrt(deta_lh**2 + dphi_lh**2)
+
+beta2  = (sys_px**2 + sys_py**2 + sys_pz**2) / np.maximum(sys_e**2, 1e-10)
+gamma  = 1. / np.sqrt(np.maximum(1. - beta2, 1e-10))
+bx = sys_px / np.maximum(sys_e, 1e-10)
+by = sys_py / np.maximum(sys_e, 1e-10)
+bz = sys_pz / np.maximum(sys_e, 1e-10)
+bp = bx*t_px + by*t_py + bz*t_pz
+gamma2     = np.where(beta2 > 1e-10, (gamma - 1.) / beta2, 0.)
+t_px_cm    = t_px + gamma2*bp*bx - gamma*bx*t_e
+t_py_cm    = t_py + gamma2*bp*by - gamma*by*t_e
+t_pz_cm    = t_pz + gamma2*bp*bz - gamma*bz*t_e
+t_p_cm     = np.sqrt(t_px_cm**2 + t_py_cm**2 + t_pz_cm**2)
+cos_theta_star = np.where(t_p_cm > 0, t_pz_cm / t_p_cm, 0.)
 
 feat_arrays = {
-    'lep_pt':      ak.to_numpy(leps.pt).astype(float),
-    'lep_eta':     ak.to_numpy(leps.eta).astype(float),
-    'met_pt':      ak.to_numpy(met.pt).astype(float),
-    'lep_top_pt':  ak.to_numpy(t).astype(float),
-    'had_top_pt':  ak.to_numpy(tbar).astype(float),
-    'HT':          ak.to_numpy(ak.sum(jets.pt, axis=1)).astype(float),
+    'lep_pt':         ak.to_numpy(leps.pt).astype(float),
+    'lep_eta':        ak.to_numpy(leps.eta).astype(float),
+    'met_pt':         met_pt_np,
+    'lep_top_pt':     t_pt,
+    'had_top_pt':     tb_pt,
+    'HT':             ak.to_numpy(ak.sum(jets.pt, axis=1)).astype(float),
+    'mT_W':           mT_W,
+    'm_ttbar':        m_ttbar,
+    'dr_tt':          dr_tt,
+    'dr_lep_had':     dr_lep_had,
+    'cos_theta_star': cos_theta_star,
 }
 
 # ── Overlay plots: direct vs poly, for SM and EFT ────────────────────────────
 BINNING = {
-    'lep_pt':      (40, 0, 400),
-    'lep_eta':     (40,-3, 3),
-    'met_pt':      (40, 0, 400),
-    'lep_top_pt':  (40, 0, 700),
-    'had_top_pt':  (40, 0, 700),
-    'HT':          (40, 0,2000),
+    'lep_pt':         (40,  0,   400),
+    'lep_eta':        (40, -3,     3),
+    'met_pt':         (40,  0,   400),
+    'lep_top_pt':     (40,  0,   700),
+    'had_top_pt':     (40,  0,   700),
+    'HT':             (40,  0,  2000),
+    'mT_W':           (40,  0,   350),
+    'm_ttbar':        (40,  0,  2500),
+    'dr_tt':          (40,  0,     6),
+    'dr_lep_had':     (40,  0,     6),
+    'cos_theta_star': (40, -1,     1),
 }
 
 for fname, vals in feat_arrays.items():
