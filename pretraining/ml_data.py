@@ -71,6 +71,12 @@ class SemiLepProcessor(ProcessorABC):
         #sum_lj0 = casted[0]+casted[1]
         #max_lj0 = ak.argmax(sum_lj0.pt, axis=1, keepdims=True)
 
+        lep_phi = leps.phi.to_numpy().astype(float)
+        met_pt  = met.pt.to_numpy().astype(float)
+        met_phi = met.phi.to_numpy().astype(float)
+        mT_W = np.sqrt(2 * leps.pt.to_numpy().astype(float) * met_pt
+                       * (1 - np.cos(lep_phi - met_phi)))
+
         features = features.concat(from_numpy(np.concatenate([[leps.pt.to_numpy()],
                                                             [leps.eta.to_numpy()],
                                                             [leps.phi.to_numpy()],
@@ -95,6 +101,7 @@ class SemiLepProcessor(ProcessorABC):
                                                             [jets.mass[:,3].to_numpy()],
                                                             [ak.num(jets).to_numpy()],
                                                             [ak.sum(jets.pt,axis=1).to_numpy()],
+                                                            [mT_W],
                                                             [jets.hadronFlavour[:,0].to_numpy().astype(float)],
                                                             [jets.hadronFlavour[:,1].to_numpy().astype(float)],
                                                             [jets.hadronFlavour[:,2].to_numpy().astype(float)],
@@ -121,6 +128,56 @@ class SemiLepProcessor(ProcessorABC):
         def sel(cond, a, b):
             return [ak.to_numpy(ak.fill_none(ak.where(cond, a, b), 0.)).astype(float)]
 
+        def to_np(arr):
+            return ak.to_numpy(ak.fill_none(arr, 0.)).astype(float)
+
+        # Extract top 4-vector components as numpy arrays
+        t_pt   = to_np(t.pt);   t_eta  = to_np(t.eta)
+        t_phi  = to_np(t.phi);  t_mass = to_np(t.mass)
+        tb_pt  = to_np(tbar.pt);  tb_eta = to_np(tbar.eta)
+        tb_phi = to_np(tbar.phi); tb_mass = to_np(tbar.mass)
+
+        # Convert (pt, eta, phi, mass) -> Cartesian 4-vectors
+        t_px  = t_pt  * np.cos(t_phi);    t_py  = t_pt  * np.sin(t_phi)
+        t_pz  = t_pt  * np.sinh(t_eta);   t_e   = np.sqrt(t_px**2 + t_py**2 + t_pz**2 + t_mass**2)
+        tb_px = tb_pt * np.cos(tb_phi);   tb_py = tb_pt * np.sin(tb_phi)
+        tb_pz = tb_pt * np.sinh(tb_eta);  tb_e  = np.sqrt(tb_px**2 + tb_py**2 + tb_pz**2 + tb_mass**2)
+
+        # ttbar system 4-vector
+        sys_px = t_px + tb_px;  sys_py = t_py + tb_py
+        sys_pz = t_pz + tb_pz;  sys_e  = t_e  + tb_e
+
+        # M(tt̄) — invariant mass of the ttbar system
+        m_ttbar = np.sqrt(np.maximum(sys_e**2 - sys_px**2 - sys_py**2 - sys_pz**2, 0.))
+
+        # ΔR(t, t̄)
+        deta_tt = t_eta - tb_eta
+        dphi_tt = np.arctan2(np.sin(t_phi - tb_phi), np.cos(t_phi - tb_phi))
+        dr_tt   = np.sqrt(deta_tt**2 + dphi_tt**2)
+
+        # ΔR(l, had_top)  —  had_top is t when lep_is_negative, else tbar
+        had_top_eta = to_np(ak.where(lep_is_negative, t.eta,  tbar.eta))
+        had_top_phi = to_np(ak.where(lep_is_negative, t.phi,  tbar.phi))
+        lep_eta_np  = leps.eta.to_numpy().astype(float)
+        lep_phi_np  = leps.phi.to_numpy().astype(float)
+        deta_lh    = lep_eta_np - had_top_eta
+        dphi_lh    = np.arctan2(np.sin(lep_phi_np - had_top_phi), np.cos(lep_phi_np - had_top_phi))
+        dr_lep_had = np.sqrt(deta_lh**2 + dphi_lh**2)
+
+        # cos θ* — angle of t in the ttbar CM frame w.r.t. beam axis (z)
+        beta2  = (sys_px**2 + sys_py**2 + sys_pz**2) / np.maximum(sys_e**2, 1e-10)
+        gamma  = 1. / np.sqrt(np.maximum(1. - beta2, 1e-10))
+        bx = sys_px / np.maximum(sys_e, 1e-10)
+        by = sys_py / np.maximum(sys_e, 1e-10)
+        bz = sys_pz / np.maximum(sys_e, 1e-10)
+        bp = bx*t_px + by*t_py + bz*t_pz
+        gamma2     = np.where(beta2 > 1e-10, (gamma - 1.) / beta2, 0.)
+        t_px_cm    = t_px + gamma2*bp*bx - gamma*bx*t_e
+        t_py_cm    = t_py + gamma2*bp*by - gamma*by*t_e
+        t_pz_cm    = t_pz + gamma2*bp*bz - gamma*bz*t_e
+        t_p_cm     = np.sqrt(t_px_cm**2 + t_py_cm**2 + t_pz_cm**2)
+        cos_theta_star = np.where(t_p_cm > 0, t_pz_cm / t_p_cm, 0.)
+
         return [
             sel(lep_is_negative, tbar.pt,   t.pt),    # lep_top pt
             sel(lep_is_negative, tbar.eta,  t.eta),   # lep_top eta
@@ -130,6 +187,10 @@ class SemiLepProcessor(ProcessorABC):
             sel(lep_is_negative, t.eta,  tbar.eta),   # had_top eta
             sel(lep_is_negative, t.phi,  tbar.phi),   # had_top phi
             sel(lep_is_negative, t.mass, tbar.mass),  # had_top mass
+            [dr_tt],           # ΔR(t, t̄)
+            [dr_lep_had],      # ΔR(l, had_top)
+            [m_ttbar],         # M(tt̄)
+            [cos_theta_star],  # cos θ* (production angle in ttbar CM frame)
         ]
 
     def postprocess(self, accumulator):
