@@ -13,6 +13,7 @@ batch merge + 無 event id 而做不到)。histogram 對 shuffle/merge 免疫。
 from typing import Dict, List, Optional
 import numpy as np
 from .schema import Sample, FEATURE_NAMES, WC_NAMES
+from .binning import get_edges
 
 
 def compare_features(
@@ -38,7 +39,23 @@ def compare_features(
         對每個 name:取共享 edges(binning.get_edges),各自 np.histogram,
         (density 時正規化),算 max|Na - Nb|,收進結果 dict。
     """
-    raise NotImplementedError("階段 2 實作:共享 edges + histogram + max-diff")
+
+    if names is None:
+        names = FEATURE_NAMES
+
+    results = {}
+    for name in names:
+        edges = get_edges(name)
+        Na, _ = np.histogram(a["features"][name], bins=edges, density=density)
+        Nb, _ = np.histogram(b["features"][name], bins=edges, density=density)
+        results[name] = {
+            "edges": edges,
+            "Na": Na,
+            "Nb": Nb,
+            "max_abs_diff": float(np.max(np.abs(Na-Nb))),
+        }
+
+    return results
 
 
 def compare_weights(
