@@ -14,7 +14,8 @@ tensor 內容(由 ml_data.py 產出、再經 random_split):
 """
 
 from typing import List, Optional
-from .schema import Sample
+from .schema import Sample, FEATURE_INDEX, validate_sample
+import torch
 
 
 def load(
@@ -39,7 +40,27 @@ def load(
         4. 用 FEATURE_INDEX 切 41 column 成 features dict(np.ndarray)。
         5. with_weights 時呼叫 _reconstruct_weights(coefs)(階段 3)。
     """
-    raise NotImplementedError("階段 2 實作:切 41 column 成 features dict")
+
+    feats_list, coefs_list = [], []
+    for path in paths:
+        _feats, _coefs = torch.load(path, weights_only=False)[:]
+        feats_list.append(_feats)
+        coefs_list.append(_coefs)
+
+    feats = torch.cat(feats_list).numpy() # (n_total, 41) float64
+    coefs = torch.cat(coefs_list).numpy() # (n_total, 153)
+
+    print(feats.shape, coefs.shape)
+
+    features = {name: feats[:, idx] for name, idx in FEATURE_INDEX.items()}
+
+    weights = {}
+    if with_weights:
+        weights = _reconstruct_weights(coefs)
+
+    sample: Sample = {"features": features, "weights": weights}
+    validate_sample(sample, require_weights=with_weights)
+    return sample
 
 
 def _reconstruct_weights(coefs) -> dict:
