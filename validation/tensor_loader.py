@@ -14,7 +14,7 @@ tensor 內容(由 ml_data.py 產出、再經 random_split):
 """
 
 from typing import List, Optional
-from .schema import Sample, FEATURE_INDEX, validate_sample
+from .schema import Sample, FEATURE_INDEX, validate_sample, WC_NAMES, SM_NAME
 import torch
 
 
@@ -53,13 +53,11 @@ def load(
     print(feats.shape, coefs.shape)
 
     features = {name: feats[:, idx] for name, idx in FEATURE_INDEX.items()}
-
-    weights = {}
-    if with_weights:
-        weights = _reconstruct_weights(coefs)
+    weights = _reconstruct_weights(coefs) if with_weights else {}
 
     sample: Sample = {"features": features, "weights": weights}
     validate_sample(sample, require_weights=with_weights)
+
     return sample
 
 
@@ -72,5 +70,22 @@ def _reconstruct_weights(coefs) -> dict:
 
     實作待辦(階段 3)。
     """
-    raise NotImplementedError("階段 3 實作:fit_coefs -> 16+1 個 weight")
+    import numpy as np
+    from pretraining.fitCoefficients import vec, wcs as FIT_WCS
+    n_wc = len(FIT_WCS) # 17
+
+    def c_vector(op_name):
+        """建一個 SM-inclusive 的 WC 向量:cSM=1,指定 operator=1,其餘 0。"""
+        c = np.zeros(n_wc)
+        c[FIT_WCS.index('cSM')] = 1.0          # 一律含 SM 項
+        if op_name != SM_NAME:              # SM 點就只有 cSM
+            c[FIT_WCS.index(op_name)] = 1.0    # 用 FIT_WCS 定位,不是 WC_NAMES!
+        return c
+
+    weights = {}
+    for name in WC_NAMES:            # 直接傳 schema 名,不預先轉換
+        c = c_vector(name)
+        weights[name] = coefs @ vec(np.outer(c, c))
+
+    return weights
 

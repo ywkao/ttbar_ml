@@ -18,12 +18,13 @@ nanoAOD_loader.py — 從 NanoAOD root 檔獨立重算 features / weights,回傳
 """
 
 from typing import List, Optional
-from .schema import Sample, FEATURE_NAMES, validate_sample
+from .schema import Sample, FEATURE_NAMES, validate_sample, SM_NAME, OPERATORS, WC_NAMES
 from coffea.nanoevents import NanoEventsFactory, NanoAODSchema
 from pretraining.analysis_tools import genObjectSelection, genEventSelection
 
 import numpy as np
 import awkward as ak
+import re
 
 NanoAODSchema.warn_missing_crossrefs = False
 
@@ -57,7 +58,7 @@ def load(
     # N_EVENTS = 2000   # increase for more statistics
     # OUTDIR   = "plots_validation"
 
-    per_file = []
+    per_file, per_file_w = [], []
     for f in files:
         print(f"Loading {nevents} events from {f}")
         events = NanoEventsFactory.from_root(
@@ -169,7 +170,10 @@ def load(
             "cos_theta_star": cos_theta_star,  # cos θ* (production angle in ttbar CM frame)
         }
 
+        _weights  = _direct_weights(events, mask) if with_weights else {}
+
         per_file.append(_feats)
+        per_file_w.append(_weights)
 
     features = {
         name: np.concatenate([d[name] for d in per_file]).astype(np.float64)
@@ -178,10 +182,14 @@ def load(
 
     weights = {}
     if with_weights:
-        weights = _direct_weights(events, mask)
+        weights = {
+            name: np.concatenate([d[name] for d in per_file_w]).astype(np.float64)
+            for name in WC_NAMES
+        }
 
     sample: Sample = {"features":features, "weights":weights}
     validate_sample(sample, require_weights=with_weights)
+
     return sample
 
 
@@ -190,8 +198,46 @@ def _direct_weights(events, mask) -> dict:
 
     - SM    : events.LHEWeight["sm_point"][mask]
     - op_i  : events.LHEWeight[rwgt_field_i][mask],rwgt_field 由 find_linear_rwgts 解析。
-
-    實作待辦(階段 3)。
     """
-    raise NotImplementedError("階段 3 實作:direct LHEWeight 取 16+1 個 weight")
 
+    def find_linear_rwgts(events):
+        """Map operator -> LHEWeight field name for the 16 single-operator-on points
+        (EFTrwgt201..EFTrwgt216), by parsing each field's encoded coefficient list."""
+        pattern = re.compile(r"^EFTrwgt(\d+)_(.*)$")
+        rwgts = {}
+        for f in events.LHEWeight.fields:
+            m = pattern.match(f)
+            if not m:
+                continue
+            n = int(m.group(1))
+            if not (201 <= n <= 216):
+                continue
+            tokens = m.group(2).split("_")
+            # tokens alternate (operator_name, value_string) like "ctGRe", "1p", "ctGIm", "0p", ...
+            for i in range(0, len(tokens) - 1, 2):
+                op, val = tokens[i], tokens[i + 1]
+                if val == "1p":
+                    rwgts[op] = f
+                    break
+        missing = [op for op in OPERATORS if op not in rwgts]
+        if missing:
+            raise RuntimeError(f"Could not find linear-on rwgt for: {missing}")
+    
+        # for key, value in rwgts.items():
+        #     print(f"Linear weights: {key}, {value}")
+
+        return rwgts
+
+    rwgts = find_linear_rwgts(events)
+
+    # Weights for SM + 16 BSM
+    w_sm = ak.to_numpy(events.LHEWeight[SM_NAME][mask]).astype(np.float64)
+    w_bsm_dict = {
+        op: ak.to_numpy(events.LHEWeight[rwgts[op]][mask]).astype(np.float64)
+        for op in OPERATORS
+    }
+
+    weights = {SM_NAME: w_sm}      # 先放 SM
+    weights.update(w_bsm_dict)     # 再併入 16 個 operator
+
+    return weights
