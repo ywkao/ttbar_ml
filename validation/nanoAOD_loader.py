@@ -18,7 +18,14 @@ nanoAOD_loader.py — 從 NanoAOD root 檔獨立重算 features / weights,回傳
 """
 
 from typing import List, Optional
-from .schema import Sample
+from .schema import Sample, FEATURE_NAMES, validate_sample
+from coffea.nanoevents import NanoEventsFactory, NanoAODSchema
+from pretraining.analysis_tools import genObjectSelection, genEventSelection
+
+import numpy as np
+import awkward as ak
+
+NanoAODSchema.warn_missing_crossrefs = False
 
 
 def load(
@@ -45,7 +52,137 @@ def load(
         4. with_weights 時呼叫 _direct_weights(events, mask)(階段 3)。
         5. 多檔則各自處理後沿第 0 軸 concat。
     """
-    raise NotImplementedError("階段 2 實作:共享 selection + 獨立重算 41 feature")
+
+    # FILE = "/eos/uscms/store/user/honor/TTbarSemileptonic/modCentral/251114_001833/0000/nanogen_modCentral_1.root"
+    # N_EVENTS = 2000   # increase for more statistics
+    # OUTDIR   = "plots_validation"
+
+    per_file = []
+    for f in files:
+        print(f"Loading {nevents} events from {f}")
+        events = NanoEventsFactory.from_root(
+            {f: 'Events'}, schemaclass=NanoAODSchema
+        ).events()[:nevents]
+
+        cleanleps, cleanjets = genObjectSelection(events)
+        mask = genEventSelection(cleanleps, cleanjets)
+        print(f"Selected {int(ak.sum(mask))} / {len(events)} events")
+
+        leps = ak.flatten(cleanleps[mask])
+        jets = cleanjets[mask]
+        met  = events.GenMET[mask]
+
+        gp = events.GenPart[mask]
+        is_final = gp.hasFlags(["fromHardProcess", "isLastCopy"])
+        t_gp    = ak.pad_none(gp[is_final & (gp.pdgId ==  6)], 1)[:, 0]
+        tbar_gp = ak.pad_none(gp[is_final & (gp.pdgId == -6)], 1)[:, 0]
+
+        def to_np(arr):
+            return ak.to_numpy(ak.fill_none(arr, 0.)).astype(float)
+
+        t_pt   = to_np(t_gp.pt);   t_eta  = to_np(t_gp.eta)
+        t_phi  = to_np(t_gp.phi);  t_mass = to_np(t_gp.mass)
+        tb_pt  = to_np(tbar_gp.pt);  tb_eta = to_np(tbar_gp.eta)
+        tb_phi = to_np(tbar_gp.phi); tb_mass = to_np(tbar_gp.mass)
+
+        t_px  = t_pt  * np.cos(t_phi);   t_py  = t_pt  * np.sin(t_phi)
+        t_pz  = t_pt  * np.sinh(t_eta);  t_e   = np.sqrt(t_px**2 + t_py**2 + t_pz**2 + t_mass**2)
+        tb_px = tb_pt * np.cos(tb_phi);  tb_py = tb_pt * np.sin(tb_phi)
+        tb_pz = tb_pt * np.sinh(tb_eta); tb_e  = np.sqrt(tb_px**2 + tb_py**2 + tb_pz**2 + tb_mass**2)
+        sys_px = t_px + tb_px;  sys_py = t_py + tb_py
+        sys_pz = t_pz + tb_pz;  sys_e  = t_e  + tb_e
+
+        lep_phi_np = ak.to_numpy(leps.phi).astype(float)
+        met_pt_np  = ak.to_numpy(met.pt).astype(float)
+        met_phi_np = ak.to_numpy(met.phi).astype(float)
+        mT_W = np.sqrt(2 * ak.to_numpy(leps.pt).astype(float) * met_pt_np
+                       * (1 - np.cos(lep_phi_np - met_phi_np)))
+
+        m_ttbar = np.sqrt(np.maximum(sys_e**2 - sys_px**2 - sys_py**2 - sys_pz**2, 0.))
+
+        deta_tt = t_eta - tb_eta
+        dphi_tt = np.arctan2(np.sin(t_phi - tb_phi), np.cos(t_phi - tb_phi))
+        dr_tt   = np.sqrt(deta_tt**2 + dphi_tt**2)
+
+        lep_is_neg  = ak.to_numpy(leps.pdgId > 0)
+        had_top_eta = np.where(lep_is_neg, t_eta,  tb_eta)
+        had_top_phi = np.where(lep_is_neg, t_phi,  tb_phi)
+        lep_eta_np  = ak.to_numpy(leps.eta).astype(float)
+        deta_lh    = lep_eta_np - had_top_eta
+        dphi_lh    = np.arctan2(np.sin(lep_phi_np - had_top_phi), np.cos(lep_phi_np - had_top_phi))
+        dr_lep_had = np.sqrt(deta_lh**2 + dphi_lh**2)
+
+        beta2  = (sys_px**2 + sys_py**2 + sys_pz**2) / np.maximum(sys_e**2, 1e-10)
+        gamma  = 1. / np.sqrt(np.maximum(1. - beta2, 1e-10))
+        bx = sys_px / np.maximum(sys_e, 1e-10)
+        by = sys_py / np.maximum(sys_e, 1e-10)
+        bz = sys_pz / np.maximum(sys_e, 1e-10)
+        bp = bx*t_px + by*t_py + bz*t_pz
+        gamma2     = np.where(beta2 > 1e-10, (gamma - 1.) / beta2, 0.)
+        t_px_cm    = t_px + gamma2*bp*bx - gamma*bx*t_e
+        t_py_cm    = t_py + gamma2*bp*by - gamma*by*t_e
+        t_pz_cm    = t_pz + gamma2*bp*bz - gamma*bz*t_e
+        t_p_cm     = np.sqrt(t_px_cm**2 + t_py_cm**2 + t_pz_cm**2)
+        cos_theta_star = np.where(t_p_cm > 0, t_pz_cm / t_p_cm, 0.)
+
+        _feats = {
+            "lep_pt"        : leps.pt.to_numpy(),
+            "lep_eta"       : leps.eta.to_numpy(),
+            "lep_phi"       : leps.phi.to_numpy(),
+            "lep_mass"      : leps.mass.to_numpy(),
+            "met_pt"        : met.pt.to_numpy(),
+            "met_phi"       : met.phi.to_numpy(),
+            "jet0_pt"       :   jets.pt[:,0].to_numpy(),
+            "jet0_eta"      :  jets.eta[:,0].to_numpy(),
+            "jet0_phi"      :  jets.phi[:,0].to_numpy(),
+            "jet0_mass"     : jets.mass[:,0].to_numpy(),
+            "jet1_pt"       :   jets.pt[:,1].to_numpy(),
+            "jet1_eta"      :  jets.eta[:,1].to_numpy(),
+            "jet1_phi"      :  jets.phi[:,1].to_numpy(),
+            "jet1_mass"     : jets.mass[:,1].to_numpy(),
+            "jet2_pt"       :   jets.pt[:,2].to_numpy(),
+            "jet2_eta"      :  jets.eta[:,2].to_numpy(),
+            "jet2_phi"      :  jets.phi[:,2].to_numpy(),
+            "jet2_mass"     : jets.mass[:,2].to_numpy(),
+            "jet3_pt"       :   jets.pt[:,3].to_numpy(),
+            "jet3_eta"      :  jets.eta[:,3].to_numpy(),
+            "jet3_phi"      :  jets.phi[:,3].to_numpy(),
+            "jet3_mass"     : jets.mass[:,3].to_numpy(),
+            "njets"         : ak.num(jets).to_numpy(),
+            "HT"            : ak.sum(jets.pt,axis=1).to_numpy(),
+            "mT_W"          : mT_W,
+            "jet0_flav"     : jets.hadronFlavour[:,0].to_numpy().astype(float),
+            "jet1_flav"     : jets.hadronFlavour[:,1].to_numpy().astype(float),
+            "jet2_flav"     : jets.hadronFlavour[:,2].to_numpy().astype(float),
+            "jet3_flav"     : jets.hadronFlavour[:,3].to_numpy().astype(float),
+            "lep_top_pt"    : np.where(lep_is_neg, tb_pt,   t_pt),    # lep_top pt
+            "lep_top_eta"   : np.where(lep_is_neg, tb_eta,  t_eta),   # lep_top eta
+            "lep_top_phi"   : np.where(lep_is_neg, tb_phi,  t_phi),   # lep_top phi
+            "lep_top_mass"  : np.where(lep_is_neg, tb_mass, t_mass),  # lep_top mass
+            "had_top_pt"    : np.where(lep_is_neg, t_pt,   tb_pt),    # had_top pt
+            "had_top_eta"   : np.where(lep_is_neg, t_eta,  tb_eta),   # had_top eta
+            "had_top_phi"   : np.where(lep_is_neg, t_phi,  tb_phi),   # had_top phi
+            "had_top_mass"  : np.where(lep_is_neg, t_mass, tb_mass),  # had_top mass
+            "dr_tt"         : dr_tt,           # ΔR(t, t̄)
+            "dr_lep_had"    : dr_lep_had,      # ΔR(l, had_top)
+            "m_ttbar"       : m_ttbar,         # M(tt̄)
+            "cos_theta_star": cos_theta_star,  # cos θ* (production angle in ttbar CM frame)
+        }
+
+        per_file.append(_feats)
+
+    features = {
+        name: np.concatenate([d[name] for d in per_file]).astype(np.float64)
+        for name in FEATURE_NAMES
+    }
+
+    weights = {}
+    if with_weights:
+        weights = _direct_weights(events, mask)
+
+    sample: Sample = {"features":features, "weights":weights}
+    validate_sample(sample, require_weights=with_weights)
+    return sample
 
 
 def _direct_weights(events, mask) -> dict:
