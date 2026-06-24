@@ -1,0 +1,107 @@
+"""
+schema.py — 驗證框架的「契約層」。
+
+這個檔案定義兩個 loader (nanoAOD_loader, tensor_loader) 之間共用的權威事實:
+  1. FEATURE_NAMES : 41 個 feature 的權威順序(已驗證 == ml_data.calc_features 的
+                     np.concatenate 實際 column 順序;ipynb 的 36 版本作廢)。
+  2. WC_NAMES      : SM + 16 operator 的權威順序。
+  3. Sample        : 兩個 loader 都必須回傳的共同 schema。
+
+設計原則:這裡只放「事實」,不放邏輯。任何環境(含沒有 ROOT / torch 的機器)
+都能 import 它,所以這裡刻意不 import 任何重套件。
+"""
+
+from typing import TypedDict, Dict
+import numpy as np
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 權威 feature 順序 — 41 個。
+# 來源:ml_data.py 的 calc_features() 內 np.concatenate 的實際次序。
+# 已用 index-by-index 比對驗證,與 test.py 的 FEATURE_NAMES 完全一致。
+# ipynb 的 36 版本(漏 met_phi + 結尾四個)不可用。
+# ─────────────────────────────────────────────────────────────────────────────
+FEATURE_NAMES = [
+    "lep_pt", "lep_eta", "lep_phi", "lep_mass",
+    "met_pt", "met_phi",
+    "jet0_pt", "jet0_eta", "jet0_phi", "jet0_mass",
+    "jet1_pt", "jet1_eta", "jet1_phi", "jet1_mass",
+    "jet2_pt", "jet2_eta", "jet2_phi", "jet2_mass",
+    "jet3_pt", "jet3_eta", "jet3_phi", "jet3_mass",
+    "njets", "HT", "mT_W",
+    "jet0_flav", "jet1_flav", "jet2_flav", "jet3_flav",
+    "lep_top_pt", "lep_top_eta", "lep_top_phi", "lep_top_mass",
+    "had_top_pt", "had_top_eta", "had_top_phi", "had_top_mass",
+    "dr_tt", "dr_lep_had", "m_ttbar", "cos_theta_star",
+]
+assert len(FEATURE_NAMES) == 41, "feature 數必須是 41(tensor column 數)"
+
+# name -> column index,給 tensor_loader 切 column 用。
+FEATURE_INDEX = {name: i for i, name in enumerate(FEATURE_NAMES)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 權威 WC 順序 — 1 個 SM + 16 operator = 17。
+# 17 個 WC 的二次型上三角 = 17*18/2 = 153,正好等於 fit_coefs 的 column 數。
+# operator 順序沿用 eft_sensitivity_scan.py 的 OPERATORS(對應 EFTrwgt201..216)。
+# ─────────────────────────────────────────────────────────────────────────────
+SM_NAME = "sm_point"
+
+OPERATORS = [
+    "ctGRe", "ctGIm",
+    "cQj18", "cQj38", "cQj11", "cQj31",
+    "ctu8", "ctd8", "ctj8", "cQu8", "cQd8",
+    "ctu1", "ctd1", "ctj1", "cQu1", "cQd1",
+]
+assert len(OPERATORS) == 16, "operator 數必須是 16"
+
+# weights dict 的 key 集合:SM + 16 operator。
+WC_NAMES = [SM_NAME] + OPERATORS
+
+N_FEATURES = len(FEATURE_NAMES)   # 41
+N_WC = 1 + len(OPERATORS)         # 17  (含 SM)
+N_COEF = N_WC * (N_WC + 1) // 2   # 153 (上三角 packing)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 共同 schema — 兩個 loader 都回傳這個。
+# validator 只看到這個型別,不知道(也不該知道)資料來自 nano 還是 tensor。
+#   - features : key = FEATURE_NAMES 之一, value shape = (n_events,)
+#   - weights  : key = WC_NAMES 之一,      value shape = (n_events,)
+# nano 側 weights = direct LHEWeight;tensor 側 weights = 由 fit_coefs 多項式重建。
+# ─────────────────────────────────────────────────────────────────────────────
+class Sample(TypedDict):
+    features: Dict[str, np.ndarray]
+    weights: Dict[str, np.ndarray]
+
+
+def validate_sample(sample: "Sample", *, require_weights: bool = True) -> None:
+    """檢查一個 Sample 是否符合契約。loader 寫完後可呼叫這個自我檢查。
+
+    Args:
+        sample: 待檢查的 Sample。
+        require_weights: 階段 2(只比 feature)時可設 False,跳過 weights 檢查。
+
+    Raises:
+        ValueError / KeyError: 任何與契約不符之處(缺 key、長度不一致等)。
+    """
+    feats = sample["features"]
+    missing = [n for n in FEATURE_NAMES if n not in feats]
+    if missing:
+        raise KeyError(f"features 缺少 {len(missing)} 個權威 key: {missing}")
+
+    lengths = {n: len(feats[n]) for n in FEATURE_NAMES}
+    n_set = set(lengths.values())
+    if len(n_set) != 1:
+        raise ValueError(f"所有 feature 長度必須一致,實得 {lengths}")
+
+    if require_weights:
+        w = sample["weights"]
+        missing_w = [n for n in WC_NAMES if n not in w]
+        if missing_w:
+            raise KeyError(f"weights 缺少 key: {missing_w}")
+        n_events = n_set.pop()
+        bad = {n: len(w[n]) for n in WC_NAMES if len(w[n]) != n_events}
+        if bad:
+            raise ValueError(f"weight 長度必須等於 feature 長度 {n_events},不符: {bad}")
+
