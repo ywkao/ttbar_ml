@@ -193,6 +193,27 @@ def load(
     return sample
 
 
+def load_weights(files, *, nevents=None):
+    """weight 軸專用:在同一份 nano 上產出逐 event 對齊的 direct & poly weight。
+    回傳 {"direct": {...17...}, "poly": {...17...}},兩者 per-event 對齊。
+    不走 Sample 契約(weight 軸是 source 內比較,跟 feature 的跨 source 不同)。
+    """
+    direct_per_file, poly_per_file = [], []
+    for f in files:
+        events = NanoEventsFactory.from_root({f: "Events"}, schemaclass=NanoAODSchema).events()
+        if nevents:
+            events = events[:nevents]
+        cleanleps, cleanjets = genObjectSelection(events)
+        mask = genEventSelection(cleanleps, cleanjets)
+
+        direct_per_file.append(_direct_weights(events, mask))
+        poly_per_file.append(_poly_weights(events, mask))
+
+    direct = {n: np.concatenate([d[n] for d in direct_per_file]) for n in WC_NAMES}
+    poly   = {n: np.concatenate([d[n] for d in poly_per_file])   for n in WC_NAMES}
+    return {"direct": direct, "poly": poly}
+
+
 def _direct_weights(events, mask) -> dict:
     """對 SM + 16 operator 取 direct LHEWeight,回傳 weights dict。
 
@@ -222,7 +243,7 @@ def _direct_weights(events, mask) -> dict:
         missing = [op for op in OPERATORS if op not in rwgts]
         if missing:
             raise RuntimeError(f"Could not find linear-on rwgt for: {missing}")
-    
+
         # for key, value in rwgts.items():
         #     print(f"Linear weights: {key}, {value}")
 
@@ -239,5 +260,42 @@ def _direct_weights(events, mask) -> dict:
 
     weights = {SM_NAME: w_sm}      # 先放 SM
     weights.update(w_bsm_dict)     # 再併入 16 個 operator
+
+    return weights
+
+def _poly_weights(events, mask) -> dict:
+    """
+    對 SM + 16 operator,在 nano 上用 calculate_fit 解係數再多項式重建 poly weight。
+    回傳 {WC_NAMES: (n_sel,) poly weight}。與 _direct_weights 逐 event 對齊,供 compare_weights 比對。
+    """
+
+    from pretraining.fitCoefficients import calculate_fit, vec, wcs as FIT_WCS
+
+    fields = events.LHEWeight.fields
+    eft_coeffs, _ = calculate_fit(fields, events.LHEWeight[mask])   # (n_pairs, n_sel)
+    coefs = eft_coeffs.T                                            # (n_sel, n_pairs)
+
+    # # Build WC vectors using the CORRECT vec convention (with sqrt(2))
+    # c0 = np.zeros(n_wc); c0[FIT_WCS.index('cSM')] = 1.0
+    # c1 = np.zeros(n_wc); c1[FIT_WCS.index('cSM')] = 1.0
+    # c1[FIT_WCS.index('ctGRe')] = 1.0
+    #
+    # w_sm_poly  = coefs @ vec(np.outer(c0, c0))
+    # w_eft_poly = coefs @ vec(np.outer(c1, c1))
+
+    n_wc = len(FIT_WCS) # 17
+
+    def c_vector(op_name):
+        """建一個 SM-inclusive 的 WC 向量:cSM=1,指定 operator=1,其餘 0。"""
+        c = np.zeros(n_wc)
+        c[FIT_WCS.index('cSM')] = 1.0          # 一律含 SM 項
+        if op_name != SM_NAME:              # SM 點就只有 cSM
+            c[FIT_WCS.index(op_name)] = 1.0    # 用 FIT_WCS 定位,不是 WC_NAMES!
+        return c
+
+    weights = {}
+    for name in WC_NAMES:            # 直接傳 schema 名,不預先轉換
+        c = c_vector(name)
+        weights[name] = coefs @ vec(np.outer(c, c))
 
     return weights

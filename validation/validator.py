@@ -58,17 +58,42 @@ def compare_features(
     return results
 
 
-def compare_weights(
-    a: Sample,
-    b: Sample,
-    *,
-    operators: Optional[List[str]] = None,
-) -> Dict[str, dict]:
-    """逐 operator 比較 direct(a)vs poly(b)的 weight 分布。
+# def compare_weights(
+#     a: Sample,
+#     b: Sample,
+#     *,
+#     operators: Optional[List[str]] = None,
+# ) -> Dict[str, dict]:
+#     """逐 operator 比較 direct(a)vs poly(b)的 weight 分布 per event (from Nano only)。
+#
+#     對每個 WC:回報 corr、mean±std、EFT/SM ratio 等診斷(沿用 test.py 的指標,loop 16 次)。
+#     """
+#
+#     if names is None:
+#         names = WC_NAMES
+#
+#     results = {}
+#     for name in names:
+#         wa = a["weights"][name]
+#         wb = b["weights"][name]
+#         results[name] = {
+#             "corr": float(np.corrcoef(wa, wb)[0, 1]),
+#             "max_abs_diff": float(np.max(np.abs(wa-wb))),
+#             "mean_a": float(wa.mean()), "std_a": float(wa.std()),
+#             "mean_b": float(wb.mean()), "std_b": float(wb.std()),
+#         }
+#     return results
 
-    對每個 WC:回報 corr、mean±std、EFT/SM ratio 等診斷(沿用 test.py 的指標,loop 16 次)。
-
-    實作待辦(階段 3)。
-    """
-    raise NotImplementedError("階段 3 實作:per-operator direct vs poly 診斷")
-
+def compare_weights(direct: dict, poly: dict, *, operators=None) -> dict:
+    """per-event 比 direct vs poly。兩者須來自同一份 nano、逐 event 對齊。"""
+    if operators is None:
+        operators = WC_NAMES
+    results = {}
+    for name in operators:
+        wd, wp = direct[name], poly[name]
+        results[name] = {
+            "corr": float(np.corrcoef(wd, wp)[0, 1]),
+            "max_abs_diff": float(np.max(np.abs(wd - wp))),
+            "mean_direct": float(wd.mean()), "mean_poly": float(wp.mean()),
+        }
+    return results
