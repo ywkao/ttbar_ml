@@ -28,7 +28,8 @@ def _finish(fig, name, outpath):
     """存檔(有 outpath)或回傳 fig(無)。集中處理收尾,兩個函式共用。"""
     import matplotlib.pyplot as plt
     if outpath is not None:
-        fig.savefig(outpath, dpi=110, bbox_inches="tight")
+        # fig.tight_layout() # UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+        fig.savefig(outpath, dpi=110)
         plt.close(fig)
         return outpath
     return fig
@@ -88,6 +89,7 @@ def overlay_multi(
     N_bsm: Dict[str, np.ndarray],
     *,
     outpath: Optional[str] = None,
+    ylabel_ratio: Optional[str] = r"$c_i = 1$ / SM",
 ):
     """畫單一 feature 上 SM(粗黑)+ 16 EFT(細彩)的 overlay + 下方 BSM/SM ratio。
 
@@ -119,7 +121,7 @@ def overlay_multi(
             ratio = np.where(N_sm > 0, N / N_sm, np.nan)
         ax2.stairs(ratio, edges, color=cmap(i % 20), linewidth=1.0, alpha=0.85)
     ax2.axhline(1.0, color="black", linewidth=1.0, alpha=0.5)
-    ax2.set_ylabel(r"$c_i = 1$ / SM")
+    ax2.set_ylabel(ylabel_ratio)
     ax2.set_xlabel(name)
     ax2.set_ylim(0, 4)
 
@@ -175,3 +177,11 @@ def weight_scatter(
 
     return _finish(fig, name, outpath)
 
+
+def normalize_hists(N_sm, N_bsm, edges):
+    """各自除以積分(面積=1),回傳 normalized 版。"""
+    widths = np.diff(edges)
+    def norm(N):
+        area = (N * widths).sum()
+        return N / area if area > 0 else N
+    return norm(N_sm), {op: norm(N) for op, N in N_bsm.items()}

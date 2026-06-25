@@ -13,12 +13,21 @@ from validation.binning import get_edges
 run_features = False
 run_nano_weights = False
 run_tens_weights = True
+normalized = True
+
+run_features = True
+run_nano_weights = True
+run_tens_weights = True
+normalized = True
 
 nano_file = "/eos/uscms/store/user/honor/TTbarSemileptonic/modCentral/251114_001833/0000/nanogen_modCentral_1.root"
 tensor_file = "/eos/uscms/store/user/ywkao/Outputs_sbi/pretraining/train.p"
 
-nano = nanoAOD_loader.load([nano_file], with_weights=True, nevents=20000)
-tens = tensor_loader.load([tensor_file], with_weights=True)
+if run_features or run_nano_weights:
+    nano = nanoAOD_loader.load([nano_file], with_weights=True, nevents=20000)
+
+if run_features or run_tens_weights:
+    tens = tensor_loader.load([tensor_file], with_weights=True)
 
 #--------------------------------------------------
 
@@ -28,7 +37,7 @@ if run_features:
     for name in ["lep_pt", "njets", "cos_theta_star"]:
         print(f"{name:16s} max|Δ| = {res[name]['max_abs_diff']:.4g}")
 
-    os.makedirs("output/feature_veriry", exist_ok=True)
+    os.makedirs("output/feature_verify", exist_ok=True)
     for name, r in res.items():
         utils.overlay(name, r["edges"], r["Na"], r["Nb"], outpath=f"output/feature_veriry/{name}.png")
     print("done, 41 feature plots")
@@ -36,7 +45,9 @@ if run_features:
 #--------------------------------------------------
 
 if run_tens_weights:
-    os.makedirs("output/eft_overlay_tensor", exist_ok=True)
+    outdir = "output/eft_overlay_tensor_norm" if normalized else "output/eft_overlay_tensor"
+    ylabel_ratio = "(normalized EFT)/(normalized SM)" if normalized else r"$c_i = 1$ / SM"
+    os.makedirs(outdir, exist_ok=True)
     for fname in tens["features"]:
         edges = get_edges(fname)
         vals = tens["features"][fname]
@@ -45,7 +56,9 @@ if run_tens_weights:
             op: np.histogram(vals, bins=edges, weights=tens["weights"][op])[0]
             for op in OPERATORS
         }
-        utils.overlay_multi(fname, edges, N_sm, N_bsm, outpath=f"output/eft_overlay_tensor/{fname}.png")
+        if normalized:
+            N_sm, N_bsm = utils.normalize_hists(N_sm, N_bsm, edges)
+        utils.overlay_multi(fname, edges, N_sm, N_bsm, outpath=f"{outdir}/{fname}.png", ylabel_ratio=ylabel_ratio)
 
 #--------------------------------------------------
 
