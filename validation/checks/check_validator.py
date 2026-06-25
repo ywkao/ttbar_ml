@@ -4,24 +4,25 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 print(f"check: {PROJECT_ROOT}")
 
-from validation import nanoAOD_loader, tensor_loader, validator, utils
 import os
-
 import numpy as np
+from validation import nanoAOD_loader, tensor_loader, validator, utils
 from validation.schema import WC_NAMES, OPERATORS, SM_NAME
 from validation.binning import get_edges
 
+run_features = False
+run_nano_weights = False
+run_tens_weights = True
 
 nano_file = "/eos/uscms/store/user/honor/TTbarSemileptonic/modCentral/251114_001833/0000/nanogen_modCentral_1.root"
 tensor_file = "/eos/uscms/store/user/ywkao/Outputs_sbi/pretraining/train.p"
 
-run_features = False
-run_weights = True
+nano = nanoAOD_loader.load([nano_file], with_weights=True, nevents=20000)
+tens = tensor_loader.load([tensor_file], with_weights=True)
 
-nano = nanoAOD_loader.load([nano_file], nevents=20000)
+#--------------------------------------------------
 
 if run_features:
-    tens = tensor_loader.load([tensor_file])
     res = validator.compare_features(nano, tens)
 
     for name in ["lep_pt", "njets", "cos_theta_star"]:
@@ -32,7 +33,23 @@ if run_features:
         utils.overlay(name, r["edges"], r["Na"], r["Nb"], outpath=f"output/feature_veriry/{name}.png")
     print("done, 41 feature plots")
 
-if run_weights:
+#--------------------------------------------------
+
+if run_tens_weights:
+    os.makedirs("output/eft_overlay_tensor", exist_ok=True)
+    for fname in tens["features"]:
+        edges = get_edges(fname)
+        vals = tens["features"][fname]
+        N_sm, _ = np.histogram(vals, bins=edges, weights=tens["weights"][SM_NAME])
+        N_bsm = {
+            op: np.histogram(vals, bins=edges, weights=tens["weights"][op])[0]
+            for op in OPERATORS
+        }
+        utils.overlay_multi(fname, edges, N_sm, N_bsm, outpath=f"output/eft_overlay_tensor/{fname}.png")
+
+#--------------------------------------------------
+
+if run_nano_weights:
     # validate weights
     w = nanoAOD_loader.load_weights([nano_file], nevents=20000)
     res_w = validator.compare_weights(w["direct"], w["poly"])
