@@ -125,3 +125,53 @@ def overlay_multi(
 
     return _finish(fig, name, outpath)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (A) 驗證圖:direct vs poly 的 scatter — 把 compare_weights 的 corr 視覺化。
+# 點全落在 y=x 對角線 → 重建完美。離線的點就是重建出問題的 event。
+# ─────────────────────────────────────────────────────────────────────────────
+def weight_scatter(
+    name: str,
+    w_direct: np.ndarray,
+    w_poly: np.ndarray,
+    *,
+    corr: Optional[float] = None,
+    max_n: int = 5000,
+    outpath: Optional[str] = None,
+):
+    """單一 WC 點:direct(x)vs poly(y)的逐 event scatter + y=x 對角線。
+
+    Args:
+        name: WC 名(標題 / 檔名)。
+        w_direct, w_poly: 逐 event 對齊的兩套 weight,長度相同。
+        corr: 若給,標在標題上(從 compare_weights 拿)。
+        max_n: 最多畫幾個點(event 太多時隨機抽樣,免得圖太重)。
+        outpath: 存檔路徑;None 則回傳 fig。
+    """
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    # event 太多就抽樣畫,不影響趨勢判讀
+    n = len(w_direct)
+    if n > max_n:
+        idx = np.random.default_rng(0).choice(n, max_n, replace=False)
+        x, y = w_direct[idx], w_poly[idx]
+    else:
+        x, y = w_direct, w_poly
+
+    ax.scatter(x, y, s=4, alpha=0.3, color="steelblue")
+
+    # y=x 對角線:點貼這條線 = 重建正確
+    lo = min(x.min(), y.min())
+    hi = max(x.max(), y.max())
+    ax.plot([lo, hi], [lo, hi], color="crimson", linewidth=1.0, linestyle="--", label="y = x")
+
+    ax.set_xlabel("direct LHEWeight")
+    ax.set_ylabel("poly (reconstructed)")
+    title = name if corr is None else f"{name}   (corr = {corr:.6f})"
+    ax.set_title(title)
+    ax.legend()
+    ax.set_aspect("equal", adjustable="datalim")
+
+    return _finish(fig, name, outpath)
+
