@@ -51,12 +51,16 @@ if run_features:
 #--------------------------------------------------
 
 if run_tens_weights:
+    rows = validator.shape_metrics(tens)            # 算
+    utils.write_sensitivity_csv(rows, "output/sensitivity.csv")  # 寫檔(呈現)
+    utils.print_top_n(rows, n=20)                   # 印(呈現)
+    utils.print_best_per_op(rows)                   # 印(呈現)
+
+
+if run_tens_weights:
     outdir = "output/eft_overlay_tensor_norm" if normalized else "output/eft_overlay_tensor"
     ylabel_ratio = "(normalized EFT)/(normalized SM)" if normalized else r"$c_i = 1$ / SM"
     os.makedirs(outdir, exist_ok=True)
-
-    rows = []
-    produce_rate_table = not normalized
 
     for idx, fname in enumerate(tens["features"]):
         edges = get_edges(fname)
@@ -69,56 +73,6 @@ if run_tens_weights:
         if normalized:
             N_sm, N_bsm = utils.normalize_hists(N_sm, N_bsm, edges)
         utils.overlay_multi(fname, edges, N_sm, N_bsm, outpath=f"{outdir}/{fname}.png", ylabel_ratio=ylabel_ratio)
-
-        # evalute shape metrics
-        if produce_rate_table:
-            if idx==0:
-                rate_table = {op: validator._rate_change(N_bsm[op], N_sm) for op in OPERATORS}
-                print("\n=== Rate change per operator (c_i = 1, sum-of-weights vs SM) ===")
-                print(f"{'operator':<8s} {'Delta R / R':>14s}")
-                for op in sorted(rate_table, key=lambda o: -abs(rate_table[o])):
-                    print(f"{op:<8s} {rate_table[op]:>+14.3%}")
-
-            for op in OPERATORS:
-                rows.append({
-                    "feature":     fname,
-                    "operator":    op,
-                    "chi2_shape":  validator._shape_chi2(N_bsm[op], N_sm),
-                    "kl_div":      validator._kl_divergence(N_bsm[op], N_sm),
-                    "rate_change": rate_table[op],
-                })
-
-    if produce_rate_table:
-        # CSV
-        csv_path = os.path.join("output", "sensitivity.csv")
-        with open(csv_path, "w", newline="") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=["feature", "operator", "chi2_shape", "kl_div", "rate_change"],
-            )
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"\nWrote {csv_path}  ({len(rows)} rows)")
-
-        # Top-N
-        topn = 20
-        print(f"\n=== Top {topn} (feature, operator) by shape chi2 ===")
-        rows_sorted = sorted(rows, key=lambda r: -r["chi2_shape"])
-        print(f"{'feature':<12s} {'operator':<8s} {'chi2_shape':>12s} "
-              f"{'KL_div':>12s} {'rate_change':>14s}")
-        for r in rows_sorted[: topn]:
-            print(f"{r['feature']:<12s} {r['operator']:<8s} "
-                  f"{r['chi2_shape']:>12.4g} {r['kl_div']:>12.4g} "
-                  f"{r['rate_change']:>+14.3%}")
-
-        # Best feature per operator
-        print(f"\n=== Best feature for each operator (by shape chi2) ===")
-        print(f"{'operator':<8s} {'best feature':<12s} {'chi2_shape':>12s} {'KL_div':>12s}")
-        for op in OPERATORS:
-            best = max((r for r in rows if r["operator"] == op),
-                       key=lambda r: r["chi2_shape"])
-            print(f"{op:<8s} {best['feature']:<12s} "
-                  f"{best['chi2_shape']:>12.4g} {best['kl_div']:>12.4g}")
 
 #--------------------------------------------------
 

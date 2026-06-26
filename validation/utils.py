@@ -185,3 +185,35 @@ def normalize_hists(N_sm, N_bsm, edges):
         area = (N * widths).sum()
         return N / area if area > 0 else N
     return norm(N_sm), {op: norm(N) for op, N in N_bsm.items()}
+
+
+def write_sensitivity_csv(rows, csv_path):
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["feature", "operator", "chi2_shape", "kl_div", "rate_change"],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"\nWrote {csv_path}  ({len(rows)} rows)")
+
+
+def print_top_n(rows, n=20):
+    print(f"\n=== Top {n} (feature, operator) by shape chi2 ===")
+    rows_sorted = sorted(rows, key=lambda r: -r["chi2_shape"])
+    print(f"{'feature':<12s} {'operator':<8s} {'chi2_shape':>12s} "
+          f"{'KL_div':>12s} {'rate_change':>14s}")
+    for r in rows_sorted[: n]:
+        print(f"{r['feature']:<12s} {r['operator']:<8s} "
+              f"{r['chi2_shape']:>12.4g} {r['kl_div']:>12.4g} "
+              f"{r['rate_change']:>+14.3%}")
+
+
+def print_best_per_op(rows):
+    print(f"\n=== Best feature for each operator (by shape chi2) ===")
+    print(f"{'operator':<8s} {'best feature':<12s} {'chi2_shape':>12s} {'KL_div':>12s}")
+    for op in OPERATORS:
+        best = max((r for r in rows if r["operator"] == op),
+                   key=lambda r: r["chi2_shape"])
+        print(f"{op:<8s} {best['feature']:<12s} "
+              f"{best['chi2_shape']:>12.4g} {best['kl_div']:>12.4g}")
