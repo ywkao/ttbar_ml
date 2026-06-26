@@ -40,7 +40,7 @@ if run_features:
     os.makedirs("output/feature_verify", exist_ok=True)
     for name, r in res.items():
         utils.overlay(name, r["edges"], r["Na"], r["Nb"], outpath=f"output/feature_veriry/{name}.png")
-    print("done, 41 feature plots")
+    print("done, 72 feature plots")
 
 #--------------------------------------------------
 
@@ -93,4 +93,4 @@ if run_nano_weights:
             for op in OPERATORS
         }
         utils.overlay_multi(fname, edges, N_sm, N_bsm, outpath=f"output/eft_overlay/{fname}.png")
-    print("done, 41 EFT overlay plots (B)")
+    print("done, 72 EFT overlay plots (B)")

@@ -27,7 +27,7 @@ def compare_features(
 
     Args:
         a, b: 兩個待比 Sample(慣例:a=nano, b=tensor,但邏輯對稱)。
-        names: 要比的 feature 子集,None = 全部 41 個。
+        names: 要比的 feature 子集,None = 全部 72 個。
         density: True 則各自正規化成面積=1 再比(母體不同時看形狀);
                  False 則比原始 count(母體相同時看逐 bin 重合)。
 

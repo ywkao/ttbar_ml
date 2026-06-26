@@ -5,8 +5,8 @@ nanoAOD_loader.py — 從 NanoAOD root 檔獨立重算 features / weights,回傳
   - selection:import 共享的 analysis_tools(genObjectSelection / genEventSelection),
                **不可**抄 eft_sensitivity_scan.py 裡 local 那份 — selection 不一致是 noise,
                必須與 ml_data 用同一份。
-  - features :獨立重算 41 個 feature(這是受測對象,必須與 tensor 側互不依賴)。
-               完整 41 個的計算邏輯參考 test.py 的 inline 版本(eft_scan 少 4 個,不可用)。
+  - features :獨立重算 72 個 feature(這是受測對象,必須與 tensor 側互不依賴)。
+               index 0-40 沿用既有邏輯;41-71 為新增(Tier 2 / Tier 1 / 3D 基底 / Tier 3)。
   - weights  :對 SM + 16 operator 取 direct LHEWeight(階段 3)。
                operator -> rwgt 欄位的對應參考 eft_sensitivity_scan.find_linear_rwgts。
 
@@ -29,6 +29,56 @@ import re
 NanoAODSchema.warn_missing_crossrefs = False
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Kinematic helpers — independent recompute of the new (index 41-71) features.
+# Same physics as pretraining.ml_data, written here as a parallel implementation
+# (the validation framework keeps the two sides separate on purpose).
+# ─────────────────────────────────────────────────────────────────────────────
+def _boost(px, py, pz, e, bx, by, bz):
+    """Boost a 4-vector into a frame moving with velocity (bx,by,bz)."""
+    b2 = np.clip(bx * bx + by * by + bz * bz, 0., 1. - 1e-9)
+    g = 1. / np.sqrt(1. - b2)
+    bp = bx * px + by * py + bz * pz
+    g2 = np.where(b2 > 1e-12, (g - 1.) / np.where(b2 > 1e-12, b2, 1.), 0.)
+    return (px + g2 * bp * bx - g * e * bx,
+            py + g2 * bp * by - g * e * by,
+            pz + g2 * bp * bz - g * e * bz,
+            g * (e - bp))
+
+
+def _rap(e, pz):
+    return 0.5 * np.log(np.clip(e + pz, 1e-10, None) / np.clip(e - pz, 1e-10, None))
+
+
+def _cart(pt, eta, phi, mass):
+    px = pt * np.cos(phi); py = pt * np.sin(phi); pz = pt * np.sinh(eta)
+    return px, py, pz, np.sqrt(px * px + py * py + pz * pz + mass * mass)
+
+
+def _rest_dir(apx, apy, apz, ae, tpx, tpy, tpz, te):
+    inv = 1. / np.maximum(te, 1e-10)
+    rx, ry, rz, _ = _boost(apx, apy, apz, ae, tpx * inv, tpy * inv, tpz * inv)
+    mag = np.maximum(np.sqrt(rx * rx + ry * ry + rz * rz), 1e-10)
+    return rx / mag, ry / mag, rz / mag
+
+
+def _cos_hel(apx, apy, apz, ae, tpx, tpy, tpz, te, sbx, sby, sbz):
+    ux, uy, uz = _rest_dir(apx, apy, apz, ae, tpx, tpy, tpz, te)
+    hx, hy, hz, _ = _boost(tpx, tpy, tpz, te, sbx, sby, sbz)
+    hmag = np.maximum(np.sqrt(hx * hx + hy * hy + hz * hz), 1e-10)
+    return np.clip((ux * hx + uy * hy + uz * hz) / hmag, -1., 1.)
+
+
+def _dr(eta1, phi1, eta2, phi2):
+    dphi = np.arctan2(np.sin(phi1 - phi2), np.cos(phi1 - phi2))
+    return np.sqrt((eta1 - eta2) ** 2 + dphi ** 2)
+
+
+def _pmass(v1, v2):
+    px = v1[0] + v2[0]; py = v1[1] + v2[1]; pz = v1[2] + v2[2]; e = v1[3] + v2[3]
+    return np.sqrt(np.maximum(e * e - px * px - py * py - pz * pz, 0.))
+
+
 def load(
     files: List[str],
     *,
@@ -49,7 +99,7 @@ def load(
         1. NanoEventsFactory.from_root 載入,選擇性截 nevents。
         2. 共享 selection:cleanleps, cleanjets = genObjectSelection(events);
            mask = genEventSelection(...)。
-        3. 重算 41 個 feature(參考 test.py inline)成 features dict(np.ndarray)。
+        3. 重算 72 個 feature 成 features dict(np.ndarray)。
         4. with_weights 時呼叫 _direct_weights(events, mask)(階段 3)。
         5. 多檔則各自處理後沿第 0 軸 concat。
     """
@@ -126,6 +176,71 @@ def load(
         t_p_cm     = np.sqrt(t_px_cm**2 + t_py_cm**2 + t_pz_cm**2)
         cos_theta_star = np.where(t_p_cm > 0, t_pz_cm / t_p_cm, 0.)
 
+        # ── new features (index 41-54): boosts, spin angles, {n,r,k} basis ──
+        lep_pt_np   = ak.to_numpy(leps.pt).astype(float)
+        lep_mass_np = ak.to_numpy(leps.mass).astype(float)
+        lep_px, lep_py, lep_pz, lep_e = _cart(lep_pt_np, lep_eta_np, lep_phi_np, lep_mass_np)
+
+        # leptonic / hadronic top 4-vectors (lep_is_neg: l- ⇒ lep top = tbar)
+        leptop_px = np.where(lep_is_neg, tb_px, t_px);  leptop_py = np.where(lep_is_neg, tb_py, t_py)
+        leptop_pz = np.where(lep_is_neg, tb_pz, t_pz);  leptop_e  = np.where(lep_is_neg, tb_e,  t_e)
+        hadtop_px = np.where(lep_is_neg, t_px, tb_px);  hadtop_py = np.where(lep_is_neg, t_py, tb_py)
+        hadtop_pz = np.where(lep_is_neg, t_pz, tb_pz);  hadtop_e  = np.where(lep_is_neg, t_e,  tb_e)
+
+        # hadronic spin analyzer: the unique hard-process down-type quark (d/s)
+        down = ak.pad_none(gp[is_final & ((abs(gp.pdgId) == 1) | (abs(gp.pdgId) == 3))], 1)[:, 0]
+        down_px, down_py, down_pz, down_e = _cart(
+            to_np(down.pt), to_np(down.eta), to_np(down.phi), to_np(down.mass))
+
+        inv_sys_e = 1. / np.maximum(sys_e, 1e-10)
+        sbx, sby, sbz = sys_px * inv_sys_e, sys_py * inv_sys_e, sys_pz * inv_sys_e
+
+        cos_theta_l   = _cos_hel(lep_px, lep_py, lep_pz, lep_e,
+                                 leptop_px, leptop_py, leptop_pz, leptop_e, sbx, sby, sbz)
+        cos_theta_had = _cos_hel(down_px, down_py, down_pz, down_e,
+                                 hadtop_px, hadtop_py, hadtop_pz, hadtop_e, sbx, sby, sbz)
+        c_hel = cos_theta_l * cos_theta_had
+
+        dy_tt = _rap(t_e, t_pz) - _rap(tb_e, tb_pz)
+        pt_tt = np.sqrt(sys_px**2 + sys_py**2)
+        y_tt  = _rap(sys_e, sys_pz)
+
+        # {n,r,k} basis from top in tt̄ CM frame (t_*_cm already computed above)
+        k_mag = np.maximum(np.sqrt(t_px_cm**2 + t_py_cm**2 + t_pz_cm**2), 1e-10)
+        kx, ky, kz = t_px_cm / k_mag, t_py_cm / k_mag, t_pz_cm / k_mag
+        sinT = np.sqrt(np.maximum(1. - kz * kz, 0.))
+        inv_sinT = np.where(sinT > 1e-6, 1. / np.maximum(sinT, 1e-10), 0.)
+        nx, ny, nz = -ky * inv_sinT, kx * inv_sinT, np.zeros_like(kx)
+        rx, ry, rz = -kz * kx * inv_sinT, -kz * ky * inv_sinT, (1. - kz * kz) * inv_sinT
+        lux, luy, luz = _rest_dir(lep_px, lep_py, lep_pz, lep_e,
+                                  leptop_px, leptop_py, leptop_pz, leptop_e)
+        hux, huy, huz = _rest_dir(down_px, down_py, down_pz, down_e,
+                                  hadtop_px, hadtop_py, hadtop_pz, hadtop_e)
+        cos_lep_n = np.clip(lux * nx + luy * ny + luz * nz, -1., 1.)
+        cos_lep_r = np.clip(lux * rx + luy * ry + luz * rz, -1., 1.)
+        cos_lep_k = np.clip(lux * kx + luy * ky + luz * kz, -1., 1.)
+        cos_had_n = np.clip(hux * nx + huy * ny + huz * nz, -1., 1.)
+        cos_had_r = np.clip(hux * rx + huy * ry + huz * rz, -1., 1.)
+        cos_had_k = np.clip(hux * kx + huy * ky + huz * kz, -1., 1.)
+
+        # ── Tier 3 (index 55-71): pairwise lepton-jet / jet-jet geometry & masses ──
+        j_eta = [ak.to_numpy(jets.eta[:, i]).astype(float)  for i in range(4)]
+        j_phi = [ak.to_numpy(jets.phi[:, i]).astype(float)  for i in range(4)]
+        j_pt  = [ak.to_numpy(jets.pt[:, i]).astype(float)   for i in range(4)]
+        j_m   = [ak.to_numpy(jets.mass[:, i]).astype(float) for i in range(4)]
+        j_fl  = [ak.to_numpy(jets.hadronFlavour[:, i])      for i in range(4)]
+        j_v   = [_cart(j_pt[i], j_eta[i], j_phi[i], j_m[i]) for i in range(4)]
+        lep_v = (lep_px, lep_py, lep_pz, lep_e)
+
+        dr_l_j = [_dr(lep_eta_np, lep_phi_np, j_eta[i], j_phi[i]) for i in range(4)]
+        _pairs = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+        dr_jj = [_dr(j_eta[i], j_phi[i], j_eta[j], j_phi[j]) for (i, j) in _pairs]
+        m_jj  = [_pmass(j_v[i], j_v[j]) for (i, j) in _pairs]
+        _m_lb = np.stack([_pmass(lep_v, j_v[i]) for i in range(4)])
+        _is_b = np.stack([j_fl[i] == 5 for i in range(4)])
+        m_lb_min = np.min(np.where(_is_b, _m_lb, np.inf), axis=0)
+        m_lb_min = np.where(np.isfinite(m_lb_min), m_lb_min, 0.)
+
         _feats = {
             "lep_pt"        : leps.pt.to_numpy(),
             "lep_eta"       : leps.eta.to_numpy(),
@@ -168,6 +283,41 @@ def load(
             "dr_lep_had"    : dr_lep_had,      # ΔR(l, had_top)
             "m_ttbar"       : m_ttbar,         # M(tt̄)
             "cos_theta_star": cos_theta_star,  # cos θ* (production angle in ttbar CM frame)
+            # ── Tier 2: tt̄ system kinematics ──
+            "dy_tt"         : dy_tt,
+            "dphi_tt"       : dphi_tt,
+            "pt_tt"         : pt_tt,
+            "y_tt"          : y_tt,
+            # ── Tier 1: spin correlation / polarization ──
+            "cos_theta_l"   : cos_theta_l,
+            "cos_theta_had" : cos_theta_had,
+            "c_hel"         : c_hel,
+            "dphi_l_had"    : dphi_lh,         # Δφ(l, had_top), lab
+            # ── 3D spin-basis projections (common {n,r,k}) ──
+            "cos_lep_n"     : cos_lep_n,
+            "cos_lep_r"     : cos_lep_r,
+            "cos_lep_k"     : cos_lep_k,
+            "cos_had_n"     : cos_had_n,
+            "cos_had_r"     : cos_had_r,
+            "cos_had_k"     : cos_had_k,
+            # ── Tier 3: pairwise geometry & masses ──
+            "dr_l_j0"       : dr_l_j[0],
+            "dr_l_j1"       : dr_l_j[1],
+            "dr_l_j2"       : dr_l_j[2],
+            "dr_l_j3"       : dr_l_j[3],
+            "dr_j01"        : dr_jj[0],
+            "dr_j02"        : dr_jj[1],
+            "dr_j03"        : dr_jj[2],
+            "dr_j12"        : dr_jj[3],
+            "dr_j13"        : dr_jj[4],
+            "dr_j23"        : dr_jj[5],
+            "m_j01"         : m_jj[0],
+            "m_j02"         : m_jj[1],
+            "m_j03"         : m_jj[2],
+            "m_j12"         : m_jj[3],
+            "m_j13"         : m_jj[4],
+            "m_j23"         : m_jj[5],
+            "m_lb_min"      : m_lb_min,
         }
 
         _weights  = _direct_weights(events, mask) if with_weights else {}

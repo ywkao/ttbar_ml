@@ -7,8 +7,8 @@ binning.py — 共享的 bin edges 設定(契約層)。
   nano 與 tensor 的 min/max 必然不同,bin edges 就不同,histogram 天生對不齊。
   所以 range 必須寫死成共享常數,不能從資料推。
 
-涵蓋全部 41 個 feature(數字主要沿用 eft_sensitivity_scan.py 的 BINNING,
-結尾四個 dr_tt/dr_lep_had/m_ttbar/cos_theta_star 沿用 test.py 的 BINNING)。
+涵蓋全部 72 個 feature(原 41 個沿用既有 BINNING;新增 31 個:角度/cos 類用
+[-1,1] 或 [-π,π],質量類給合理上限)。
 """
 
 import numpy as np
@@ -44,7 +44,32 @@ BINNING["dr_lep_had"]     = (40,  0,  6)
 BINNING["m_ttbar"]        = (40,  0, 2500)
 BINNING["cos_theta_star"] = (40, -1,  1)
 
-# 契約自檢:binning 必須剛好覆蓋 41 個權威 feature,不多不少。
+# ── Tier 2: tt̄ system kinematics ──
+BINNING["dy_tt"]   = (40, -5,      5)
+BINNING["dphi_tt"] = (40, -np.pi,  np.pi)
+BINNING["pt_tt"]   = (50,  0,   1000)
+BINNING["y_tt"]    = (40, -3,      3)
+
+# ── Tier 1: spin correlation / polarization ── (all cos ∈ [-1, 1])
+BINNING["cos_theta_l"]   = (40, -1,      1)
+BINNING["cos_theta_had"] = (40, -1,      1)
+BINNING["c_hel"]         = (40, -1,      1)
+BINNING["dphi_l_had"]    = (40, -np.pi,  np.pi)
+
+# ── 3D spin-basis projections ── (all cos ∈ [-1, 1])
+for _a in ("lep", "had"):
+    for _ax in ("n", "r", "k"):
+        BINNING[f"cos_{_a}_{_ax}"] = (40, -1, 1)
+
+# ── Tier 3: pairwise geometry & masses ──
+for _i in range(4):
+    BINNING[f"dr_l_j{_i}"] = (40, 0, 6)
+for _p in ("01", "02", "03", "12", "13", "23"):
+    BINNING[f"dr_j{_p}"] = (40, 0,   6)
+    BINNING[f"m_j{_p}"]  = (50, 0, 500)
+BINNING["m_lb_min"] = (50, 0, 300)
+
+# 契約自檢:binning 必須剛好覆蓋 72 個權威 feature,不多不少。
 _missing = [n for n in FEATURE_NAMES if n not in BINNING]
 _extra = [n for n in BINNING if n not in FEATURE_NAMES]
 assert not _missing, f"binning 缺少 feature: {_missing}"
