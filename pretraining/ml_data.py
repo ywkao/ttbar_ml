@@ -62,6 +62,29 @@ def _rest_frame_dir(a_px, a_py, a_pz, a_e, top_px, top_py, top_pz, top_e):
     return rx / mag, ry / mag, rz / mag
 
 
+def _to_cartesian(pt, eta, phi, mass):
+    """(pt, eta, phi, mass) numpy arrays -> Cartesian (px, py, pz, E)."""
+    px = pt * np.cos(phi)
+    py = pt * np.sin(phi)
+    pz = pt * np.sinh(eta)
+    e  = np.sqrt(px * px + py * py + pz * pz + mass * mass)
+    return px, py, pz, e
+
+
+def _delta_r(eta1, phi1, eta2, phi2):
+    """ΔR = sqrt(Δη² + Δφ²) with Δφ wrapped to (-π, π]."""
+    deta = eta1 - eta2
+    dphi = np.arctan2(np.sin(phi1 - phi2), np.cos(phi1 - phi2))
+    return np.sqrt(deta * deta + dphi * dphi)
+
+
+def _pair_mass(v1, v2):
+    """Invariant mass of two 4-vectors given as (px, py, pz, e) tuples."""
+    px = v1[0] + v2[0];  py = v1[1] + v2[1]
+    pz = v1[2] + v2[2];  e  = v1[3] + v2[3]
+    return np.sqrt(np.maximum(e * e - px * px - py * py - pz * pz, 0.))
+
+
 class SemiLepProcessor(ProcessorABC):
     def __init__(self, runFit=True, dtype=float64):
         self.runFit = runFit
@@ -159,6 +182,7 @@ class SemiLepProcessor(ProcessorABC):
                                                             [jets.hadronFlavour[:,2].to_numpy().astype(float)],
                                                             [jets.hadronFlavour[:,3].to_numpy().astype(float)],
                                                             *self.calc_top_features(genparts, leps),
+                                                            *self.calc_pair_features(leps, jets),
                                                             #[lep_jets.mass.to_numpy()],
                                                             #[leps.delta_phi(jets[:,0]).to_numpy()],
                                                             #[leps.delta_phi(jets[:,1]).to_numpy()],
@@ -336,6 +360,46 @@ class SemiLepProcessor(ProcessorABC):
             [cos_had_r],       # cosθ_r^had
             [cos_had_k],       # cosθ_k^had
         ]
+
+    def calc_pair_features(self, leps, jets):
+        """Tier 3: pairwise lepton-jet / jet-jet geometry and masses.
+        Computed on the leading 4 jets; combinatoric (no truth matching), so the
+        same code transfers directly to reco-level jets. Returns a list of
+        [1D numpy array] entries, one per feature, for np.concatenate splicing."""
+        lep_eta  = leps.eta.to_numpy().astype(float)
+        lep_phi  = leps.phi.to_numpy().astype(float)
+        lep_pt   = leps.pt.to_numpy().astype(float)
+        lep_mass = leps.mass.to_numpy().astype(float)
+        lep_vec  = _to_cartesian(lep_pt, lep_eta, lep_phi, lep_mass)
+
+        # leading-4 jet kinematics as numpy
+        j_eta  = [jets.eta[:, i].to_numpy().astype(float)  for i in range(4)]
+        j_phi  = [jets.phi[:, i].to_numpy().astype(float)  for i in range(4)]
+        j_pt   = [jets.pt[:, i].to_numpy().astype(float)   for i in range(4)]
+        j_mass = [jets.mass[:, i].to_numpy().astype(float) for i in range(4)]
+        j_flav = [jets.hadronFlavour[:, i].to_numpy()      for i in range(4)]
+        j_vec  = [_to_cartesian(j_pt[i], j_eta[i], j_phi[i], j_mass[i]) for i in range(4)]
+
+        # ΔR(lepton, jet_i)
+        dr_l_j = [_delta_r(lep_eta, lep_phi, j_eta[i], j_phi[i]) for i in range(4)]
+
+        # jet-pair ΔR and invariant mass (6 unordered pairs of the leading 4 jets)
+        pairs = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+        dr_jj = [_delta_r(j_eta[i], j_phi[i], j_eta[j], j_phi[j]) for (i, j) in pairs]
+        m_jj  = [_pair_mass(j_vec[i], j_vec[j]) for (i, j) in pairs]
+
+        # m(l, b): min over b-tagged leading jets (hadronFlavour == 5); 0 if none
+        m_lb = np.stack([_pair_mass(lep_vec, j_vec[i]) for i in range(4)])   # (4, N)
+        is_b = np.stack([j_flav[i] == 5 for i in range(4)])                  # (4, N)
+        m_lb_min = np.min(np.where(is_b, m_lb, np.inf), axis=0)
+        m_lb_min = np.where(np.isfinite(m_lb_min), m_lb_min, 0.)
+
+        return (
+            [[dr_l_j[i]] for i in range(4)] +   # ΔR(l, jet0..3)
+            [[x] for x in dr_jj] +              # ΔR(jet_i, jet_j), 6 pairs
+            [[x] for x in m_jj] +               # m(jet_i, jet_j), 6 pairs
+            [[m_lb_min]]                        # min m(l, b)
+        )
 
     def postprocess(self, accumulator):
         return accumulator
