@@ -2,11 +2,11 @@
 tensor_loader.py — 從 train.p / test.p / validation.p 載入 tensor,回傳 Sample。
 
 tensor 內容(由 ml_data.py 產出、再經 random_split):
-  - features : (n_events, 72)  float64,column 順序見 schema.FEATURE_NAMES
+  - features : (n_events, 74)  float64,column 順序見 schema.FEATURE_NAMES
   - fit_coefs: (n_events, 153) float64,17 個 WC 二次型的上三角 packing
 
 職責:
-  - features:用 schema.FEATURE_INDEX 把 72 個 column 切成 features dict。(直接切,不重算)
+  - features:用 schema.FEATURE_INDEX 把 74 個 column 切成 features dict。(直接切,不重算)
   - weights :由 fit_coefs 多項式重建 SM + 16 operator 的 weight。(階段 3 才實作)
 
 注意:這裡的 feature 是「直接讀 tensor 既有的值」,這正是受測對象之一,
@@ -47,7 +47,7 @@ def load(
         feats_list.append(_feats)
         coefs_list.append(_coefs)
 
-    feats = torch.cat(feats_list).numpy() # (n_total, 72) float64
+    feats = torch.cat(feats_list).numpy() # (n_total, 74) float64
     coefs = torch.cat(coefs_list).numpy() # (n_total, 153)
 
     print(feats.shape, coefs.shape)

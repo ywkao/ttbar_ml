@@ -2,7 +2,7 @@
 schema.py — 驗證框架的「契約層」。
 
 這個檔案定義兩個 loader (nanoAOD_loader, tensor_loader) 之間共用的權威事實:
-  1. FEATURE_NAMES : 72 個 feature 的權威順序(== ml_data.calc_features 的
+  1. FEATURE_NAMES : 74 個 feature 的權威順序(== ml_data.calc_features 的
                      np.concatenate 實際 column 順序:29 base + 26 calc_top_features
                      + 17 calc_pair_features)。
   2. WC_NAMES      : SM + 16 operator 的權威順序。
@@ -17,9 +17,10 @@ import numpy as np
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 權威 feature 順序 — 72 個。
+# 權威 feature 順序 — 74 個。
 # 來源:ml_data.py 的 calc_features() 內 np.concatenate 的實際次序。
-# index 0-40 為原始 41 個;41-71 為新增(Tier 2 / Tier 1 / 3D 基底 / Tier 3)。
+# index 0-40 為原始 41 個;41-73 為新增(Tier 2 / Tier 1 / 3D 基底 / 開角組合 / Tier 3)。
+# 註:c_hel(index 55)= û_l·û_had 開角餘弦(⟨c_hel⟩=−D/3),非舊版 cosθ_l·cosθ_had 乘積。
 # ─────────────────────────────────────────────────────────────────────────────
 FEATURE_NAMES = [
     "lep_pt", "lep_eta", "lep_phi", "lep_mass",
@@ -36,17 +37,19 @@ FEATURE_NAMES = [
     # ── Tier 2: tt̄ system kinematics ──
     "dy_tt", "dphi_tt", "pt_tt", "y_tt",
     # ── Tier 1: spin correlation / polarization (helicity frame) ──
-    "cos_theta_l", "cos_theta_had", "c_hel", "dphi_l_had",
+    "cos_theta_l", "cos_theta_had", "dphi_l_had",
     # ── 3D spin-basis projections (common {n,r,k}) ──
     "cos_lep_n", "cos_lep_r", "cos_lep_k",
     "cos_had_n", "cos_had_r", "cos_had_k",
+    # ── opening-angle / relative-velocity combinations ──
+    "beta_t_star", "c_hel", "c_han",
     # ── Tier 3: pairwise lepton-jet / jet-jet geometry & masses ──
     "dr_l_j0", "dr_l_j1", "dr_l_j2", "dr_l_j3",
     "dr_j01", "dr_j02", "dr_j03", "dr_j12", "dr_j13", "dr_j23",
     "m_j01", "m_j02", "m_j03", "m_j12", "m_j13", "m_j23",
     "m_lb_min",
 ]
-assert len(FEATURE_NAMES) == 72, "feature 數必須是 72(tensor column 數)"
+assert len(FEATURE_NAMES) == 74, "feature 數必須是 74(tensor column 數)"
 
 # name -> column index,給 tensor_loader 切 column 用。
 FEATURE_INDEX = {name: i for i, name in enumerate(FEATURE_NAMES)}
@@ -70,7 +73,7 @@ assert len(OPERATORS) == 16, "operator 數必須是 16"
 # weights dict 的 key 集合:SM + 16 operator。
 WC_NAMES = [SM_NAME] + OPERATORS
 
-N_FEATURES = len(FEATURE_NAMES)   # 72
+N_FEATURES = len(FEATURE_NAMES)   # 74
 N_WC = 1 + len(OPERATORS)         # 17  (含 SM)
 N_COEF = N_WC * (N_WC + 1) // 2   # 153 (上三角 packing)
 

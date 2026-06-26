@@ -72,6 +72,16 @@ def _to_cartesian(pt, eta, phi, mass):
     return px, py, pz, e
 
 
+def _beta_t_star(tl_px, tl_py, tl_pz, tl_e, th_px, th_py, th_pz, th_e):
+    """β* of the leptonic top in the hadronic-top rest frame (relative velocity
+    of the two tops); boost t_ℓ into t_h's rest frame and take |p|/E. ∈ [0, 1)."""
+    inv_e = 1. / np.maximum(th_e, 1e-10)
+    px2, py2, pz2, e2 = _boost_into(tl_px, tl_py, tl_pz, tl_e,
+                                    th_px * inv_e, th_py * inv_e, th_pz * inv_e)
+    p_mag = np.sqrt(px2**2 + py2**2 + pz2**2)
+    return np.clip(p_mag / np.maximum(e2, 1e-10), 0., 1.)
+
+
 def _delta_r(eta1, phi1, eta2, phi2):
     """ΔR = sqrt(Δη² + Δφ²) with Δφ wrapped to (-π, π]."""
     deta = eta1 - eta2
@@ -301,7 +311,6 @@ class SemiLepProcessor(ProcessorABC):
         cos_theta_had = _cos_helicity(down_px, down_py, down_pz, down_e,
                                       hadtop_px, hadtop_py, hadtop_pz, hadtop_e,
                                       sys_bx, sys_by, sys_bz)
-        c_hel = cos_theta_l * cos_theta_had
         dphi_l_had = dphi_lh   # Δφ(l, had_top), lab (reuse signed value from above)
 
         # ── Tier 2: tt̄ system kinematics ──
@@ -334,6 +343,16 @@ class SemiLepProcessor(ProcessorABC):
         cos_had_r = np.clip(had_ux * rx + had_uy * ry + had_uz * rz, -1., 1.)
         cos_had_k = np.clip(had_ux * kx + had_uy * ky + had_uz * kz, -1., 1.)
 
+        # ── opening-angle spin observables (rest-frame analyzer directions) ──
+        # c_hel = û_l · û_had = cos of the opening angle between the two analyzers
+        # in their parent-top rest frames; ⟨c_hel⟩ = −D/3 (entanglement D-marker).
+        c_hel = np.clip(lep_ux * had_ux + lep_uy * had_uy + lep_uz * had_uz, -1., 1.)
+        # c_han: n+r−k combination of the common-basis projections (Bell-type).
+        c_han = np.clip(c_hel - 2. * cos_lep_k * cos_had_k, -1., 1.)
+        # β* of the leptonic top in the hadronic-top rest frame (relative tt̄ velocity)
+        beta_t_star = _beta_t_star(leptop_px, leptop_py, leptop_pz, leptop_e,
+                                   hadtop_px, hadtop_py, hadtop_pz, hadtop_e)
+
         return [
             sel(lep_is_negative, tbar.pt,   t.pt),    # lep_top pt
             sel(lep_is_negative, tbar.eta,  t.eta),   # lep_top eta
@@ -355,7 +374,6 @@ class SemiLepProcessor(ProcessorABC):
             # ── Tier 1: spin correlation / polarization (helicity frame) ──
             [cos_theta_l],     # cosθ*_l   — leptonic-top analyzer = charged lepton
             [cos_theta_had],   # cosθ*_had — hadronic-top analyzer = down-type quark
-            [c_hel],           # C_hel = cosθ_l · cosθ_had  (spin correlation)
             [dphi_l_had],      # Δφ(l, had_top), lab
             # ── 3D spin-basis projections (common {n,r,k}; building blocks of B/C) ──
             [cos_lep_n],       # cosθ_n^lep
@@ -364,6 +382,10 @@ class SemiLepProcessor(ProcessorABC):
             [cos_had_n],       # cosθ_n^had
             [cos_had_r],       # cosθ_r^had
             [cos_had_k],       # cosθ_k^had
+            # ── opening-angle / relative-velocity combinations ──
+            [beta_t_star],     # β* of leptonic top in hadronic-top rest frame
+            [c_hel],           # c_hel = û_l·û_had opening angle  (⟨c_hel⟩ = −D/3)
+            [c_han],           # n+r−k spin combination (Bell-type)
         ]
 
     def calc_pair_features(self, leps, jets):

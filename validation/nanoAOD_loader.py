@@ -5,7 +5,7 @@ nanoAOD_loader.py — 從 NanoAOD root 檔獨立重算 features / weights,回傳
   - selection:import 共享的 analysis_tools(genObjectSelection / genEventSelection),
                **不可**抄 eft_sensitivity_scan.py 裡 local 那份 — selection 不一致是 noise,
                必須與 ml_data 用同一份。
-  - features :獨立重算 72 個 feature(這是受測對象,必須與 tensor 側互不依賴)。
+  - features :獨立重算 74 個 feature(這是受測對象,必須與 tensor 側互不依賴)。
                index 0-40 沿用既有邏輯;41-71 為新增(Tier 2 / Tier 1 / 3D 基底 / Tier 3)。
   - weights  :對 SM + 16 operator 取 direct LHEWeight(階段 3)。
                operator -> rwgt 欄位的對應參考 eft_sensitivity_scan.find_linear_rwgts。
@@ -68,6 +68,13 @@ def _cos_hel(apx, apy, apz, ae, tpx, tpy, tpz, te, sbx, sby, sbz):
     hx, hy, hz, _ = _boost(tpx, tpy, tpz, te, sbx, sby, sbz)
     hmag = np.maximum(np.sqrt(hx * hx + hy * hy + hz * hz), 1e-10)
     return np.clip((ux * hx + uy * hy + uz * hz) / hmag, -1., 1.)
+
+
+def _beta_t_star(tl_px, tl_py, tl_pz, tl_e, th_px, th_py, th_pz, th_e):
+    """β* of t_ℓ in t_h's rest frame (relative tt̄ velocity); ∈ [0, 1)."""
+    inv = 1. / np.maximum(th_e, 1e-10)
+    px2, py2, pz2, e2 = _boost(tl_px, tl_py, tl_pz, tl_e, th_px * inv, th_py * inv, th_pz * inv)
+    return np.clip(np.sqrt(px2**2 + py2**2 + pz2**2) / np.maximum(e2, 1e-10), 0., 1.)
 
 
 def _dr(eta1, phi1, eta2, phi2):
@@ -204,7 +211,6 @@ def load(
                                  leptop_px, leptop_py, leptop_pz, leptop_e, sbx, sby, sbz)
         cos_theta_had = _cos_hel(down_px, down_py, down_pz, down_e,
                                  hadtop_px, hadtop_py, hadtop_pz, hadtop_e, sbx, sby, sbz)
-        c_hel = cos_theta_l * cos_theta_had
 
         dy_tt = _rap(t_e, t_pz) - _rap(tb_e, tb_pz)
         pt_tt = np.sqrt(sys_px**2 + sys_py**2)
@@ -228,7 +234,13 @@ def load(
         cos_had_r = np.clip(hux * rx + huy * ry + huz * rz, -1., 1.)
         cos_had_k = np.clip(hux * kx + huy * ky + huz * kz, -1., 1.)
 
-        # ── Tier 3 (index 55-71): pairwise lepton-jet / jet-jet geometry & masses ──
+        # ── opening-angle / relative-velocity combinations ──
+        c_hel = np.clip(lux * hux + luy * huy + luz * huz, -1., 1.)  # û_l·û_had opening angle
+        c_han = np.clip(c_hel - 2. * cos_lep_k * cos_had_k, -1., 1.)
+        beta_t_star = _beta_t_star(leptop_px, leptop_py, leptop_pz, leptop_e,
+                                   hadtop_px, hadtop_py, hadtop_pz, hadtop_e)
+
+        # ── Tier 3 (index 57-73): pairwise lepton-jet / jet-jet geometry & masses ──
         j_eta = [ak.to_numpy(jets.eta[:, i]).astype(float)  for i in range(4)]
         j_phi = [ak.to_numpy(jets.phi[:, i]).astype(float)  for i in range(4)]
         j_pt  = [ak.to_numpy(jets.pt[:, i]).astype(float)   for i in range(4)]
@@ -296,7 +308,6 @@ def load(
             # ── Tier 1: spin correlation / polarization ──
             "cos_theta_l"   : cos_theta_l,
             "cos_theta_had" : cos_theta_had,
-            "c_hel"         : c_hel,
             "dphi_l_had"    : dphi_lh,         # Δφ(l, had_top), lab
             # ── 3D spin-basis projections (common {n,r,k}) ──
             "cos_lep_n"     : cos_lep_n,
@@ -305,6 +316,10 @@ def load(
             "cos_had_n"     : cos_had_n,
             "cos_had_r"     : cos_had_r,
             "cos_had_k"     : cos_had_k,
+            # ── opening-angle / relative-velocity combinations ──
+            "beta_t_star"   : beta_t_star,
+            "c_hel"         : c_hel,           # û_l·û_had opening angle (⟨c_hel⟩ = −D/3)
+            "c_han"         : c_han,
             # ── Tier 3: pairwise geometry & masses ──
             "dr_l_j0"       : dr_l_j[0],
             "dr_l_j1"       : dr_l_j[1],
