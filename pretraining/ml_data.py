@@ -64,6 +64,7 @@ def _rest_frame_dir(a_px, a_py, a_pz, a_e, top_px, top_py, top_pz, top_e):
 
 def _to_cartesian(pt, eta, phi, mass):
     """(pt, eta, phi, mass) numpy arrays -> Cartesian (px, py, pz, E)."""
+    eta = np.clip(eta, -10., 10.)
     px = pt * np.cos(phi)
     py = pt * np.sin(phi)
     pz = pt * np.sinh(eta)
@@ -275,11 +276,15 @@ class SemiLepProcessor(ProcessorABC):
         hadtop_e  = np.where(lep_from_tbar, t_e,  tb_e)
 
         # ── hadronic spin analyzer: down-type quark (d/s) from the hadronic W ──
-        # In a semileptonic tt̄ event there is exactly one hard-process down-type
-        # quark (the leptonic W yields a lepton), so no parent matching is needed.
-        down_quark = ak.pad_none(genparts[is_final & ((abs(genparts.pdgId) == 1) |
-                                                      (abs(genparts.pdgId) == 3))], 1)[:, 0]
-        down_pt   = to_np(down_quark.pt);   down_eta  = to_np(down_quark.eta)
+        # Require the quark's parent to be a W: the bare |pdgId|∈{1,3} selection also
+        # tags INITIAL-STATE (status-21) d/s partons from qq̄ initiation, which sit at
+        # the front of GenPart and lie along the beam (pt≈0, |eta|→∞ → sinh overflow).
+        # The W-parent cut keeps exactly the hadronic-W down-type quark.
+        down_all   = genparts[is_final & ((abs(genparts.pdgId) == 1) |
+                                          (abs(genparts.pdgId) == 3))]
+        down_from_w = ak.fill_none(abs(down_all.distinctParent.pdgId) == 24, False)
+        down_quark = ak.pad_none(down_all[down_from_w], 1)[:, 0]
+        down_pt   = to_np(down_quark.pt);   down_eta  = np.clip(to_np(down_quark.eta), -10., 10.)
         down_phi  = to_np(down_quark.phi);  down_mass = to_np(down_quark.mass)
         down_px = down_pt * np.cos(down_phi);  down_py = down_pt * np.sin(down_phi)
         down_pz = down_pt * np.sinh(down_eta)

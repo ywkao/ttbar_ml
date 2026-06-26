@@ -51,6 +51,7 @@ def _rap(e, pz):
 
 
 def _cart(pt, eta, phi, mass):
+    eta = np.clip(eta, -10., 10.)
     px = pt * np.cos(phi); py = pt * np.sin(phi); pz = pt * np.sinh(eta)
     return px, py, pz, np.sqrt(px * px + py * py + pz * pz + mass * mass)
 
@@ -187,8 +188,12 @@ def load(
         hadtop_px = np.where(lep_is_neg, t_px, tb_px);  hadtop_py = np.where(lep_is_neg, t_py, tb_py)
         hadtop_pz = np.where(lep_is_neg, t_pz, tb_pz);  hadtop_e  = np.where(lep_is_neg, t_e,  tb_e)
 
-        # hadronic spin analyzer: the unique hard-process down-type quark (d/s)
-        down = ak.pad_none(gp[is_final & ((abs(gp.pdgId) == 1) | (abs(gp.pdgId) == 3))], 1)[:, 0]
+        # hadronic spin analyzer: the hard-process down-type quark (d/s) from the
+        # hadronic W. Require parent == W to exclude initial-state (status-21) d/s
+        # partons that the bare |pdgId|∈{1,3} cut would otherwise pick up.
+        down_all = gp[is_final & ((abs(gp.pdgId) == 1) | (abs(gp.pdgId) == 3))]
+        down = ak.pad_none(
+            down_all[ak.fill_none(abs(down_all.distinctParent.pdgId) == 24, False)], 1)[:, 0]
         down_px, down_py, down_pz, down_e = _cart(
             to_np(down.pt), to_np(down.eta), to_np(down.phi), to_np(down.mass))
 
