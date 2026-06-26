@@ -10,6 +10,58 @@ from .TensorAccumulator import TensorAccumulator
 
 NanoAODSchema.warn_missing_crossrefs = False
 
+
+def _boost_into(px, py, pz, e, bx, by, bz):
+    """Boost a 4-vector (px,py,pz,e) into a frame moving with velocity (bx,by,bz)
+    relative to the current frame. All inputs are numpy arrays of equal shape.
+    Returns (px', py', pz', e')."""
+    b2 = bx * bx + by * by + bz * bz
+    b2 = np.clip(b2, 0., 1. - 1e-9)
+    gamma = 1. / np.sqrt(1. - b2)
+    bp = bx * px + by * py + bz * pz
+    safe_b2 = np.where(b2 > 1e-12, b2, 1.)
+    gamma2 = np.where(b2 > 1e-12, (gamma - 1.) / safe_b2, 0.)
+    px2 = px + gamma2 * bp * bx - gamma * e * bx
+    py2 = py + gamma2 * bp * by - gamma * e * by
+    pz2 = pz + gamma2 * bp * bz - gamma * e * bz
+    e2 = gamma * (e - bp)
+    return px2, py2, pz2, e2
+
+
+def _rapidity(e, pz):
+    """Rapidity y = 0.5 ln[(E+pz)/(E-pz)], guarded against div-by-zero / log(0)."""
+    num = np.clip(e + pz, 1e-10, None)
+    den = np.clip(e - pz, 1e-10, None)
+    return 0.5 * np.log(num / den)
+
+
+def _cos_helicity(a_px, a_py, a_pz, a_e,
+                  top_px, top_py, top_pz, top_e,
+                  sys_bx, sys_by, sys_bz):
+    """cos of the angle, in the parent-top rest frame, between a spin-analyzer's
+    direction and the helicity axis (the parent-top flight direction in the tt̄ CM
+    frame). The analyzer is boosted into the top rest frame; the top is boosted into
+    the tt̄ CM frame to define the axis. Returns cosθ in [-1, 1]."""
+    inv_te = 1. / np.maximum(top_e, 1e-10)
+    ax, ay, az, _ = _boost_into(a_px, a_py, a_pz, a_e,
+                                top_px * inv_te, top_py * inv_te, top_pz * inv_te)
+    amag = np.sqrt(ax * ax + ay * ay + az * az)
+    hx, hy, hz, _ = _boost_into(top_px, top_py, top_pz, top_e, sys_bx, sys_by, sys_bz)
+    hmag = np.sqrt(hx * hx + hy * hy + hz * hz)
+    cos = (ax * hx + ay * hy + az * hz) / np.maximum(amag * hmag, 1e-10)
+    return np.clip(cos, -1., 1.)
+
+
+def _rest_frame_dir(a_px, a_py, a_pz, a_e, top_px, top_py, top_pz, top_e):
+    """Unit direction of an analyzer in its parent-top rest frame.
+    Returns (ux, uy, uz) numpy arrays."""
+    inv_te = 1. / np.maximum(top_e, 1e-10)
+    rx, ry, rz, _ = _boost_into(a_px, a_py, a_pz, a_e,
+                                top_px * inv_te, top_py * inv_te, top_pz * inv_te)
+    mag = np.maximum(np.sqrt(rx * rx + ry * ry + rz * rz), 1e-10)
+    return rx / mag, ry / mag, rz / mag
+
+
 class SemiLepProcessor(ProcessorABC):
     def __init__(self, runFit=True, dtype=float64):
         self.runFit = runFit
@@ -178,6 +230,81 @@ class SemiLepProcessor(ProcessorABC):
         t_p_cm     = np.sqrt(t_px_cm**2 + t_py_cm**2 + t_pz_cm**2)
         cos_theta_star = np.where(t_p_cm > 0, t_pz_cm / t_p_cm, 0.)
 
+        # ── lepton 4-vector (lab, Cartesian); lep_eta/phi already derived above ──
+        lep_pt   = leps.pt.to_numpy().astype(float)
+        lep_mass = leps.mass.to_numpy().astype(float)
+        lep_px = lep_pt * np.cos(lep_phi_np);  lep_py = lep_pt * np.sin(lep_phi_np)
+        lep_pz = lep_pt * np.sinh(lep_eta_np)
+        lep_e  = np.sqrt(lep_px**2 + lep_py**2 + lep_pz**2 + lep_mass**2)
+
+        # ── leptonic / hadronic top 4-vectors (lab, Cartesian) ──
+        # l- (lep_is_negative) comes from tbar's W-, so the leptonic top is tbar
+        # and the hadronic top is t; for l+ the roles swap.
+        lep_from_tbar = ak.to_numpy(lep_is_negative).astype(bool)
+        leptop_px = np.where(lep_from_tbar, tb_px, t_px)
+        leptop_py = np.where(lep_from_tbar, tb_py, t_py)
+        leptop_pz = np.where(lep_from_tbar, tb_pz, t_pz)
+        leptop_e  = np.where(lep_from_tbar, tb_e,  t_e)
+        hadtop_px = np.where(lep_from_tbar, t_px, tb_px)
+        hadtop_py = np.where(lep_from_tbar, t_py, tb_py)
+        hadtop_pz = np.where(lep_from_tbar, t_pz, tb_pz)
+        hadtop_e  = np.where(lep_from_tbar, t_e,  tb_e)
+
+        # ── hadronic spin analyzer: down-type quark (d/s) from the hadronic W ──
+        # In a semileptonic tt̄ event there is exactly one hard-process down-type
+        # quark (the leptonic W yields a lepton), so no parent matching is needed.
+        down_quark = ak.pad_none(genparts[is_final & ((abs(genparts.pdgId) == 1) |
+                                                      (abs(genparts.pdgId) == 3))], 1)[:, 0]
+        down_pt   = to_np(down_quark.pt);   down_eta  = to_np(down_quark.eta)
+        down_phi  = to_np(down_quark.phi);  down_mass = to_np(down_quark.mass)
+        down_px = down_pt * np.cos(down_phi);  down_py = down_pt * np.sin(down_phi)
+        down_pz = down_pt * np.sinh(down_eta)
+        down_e  = np.sqrt(down_px**2 + down_py**2 + down_pz**2 + down_mass**2)
+
+        # tt̄ CM boost vector (lab → tt̄ rest frame)
+        inv_sys_e = 1. / np.maximum(sys_e, 1e-10)
+        sys_bx = sys_px * inv_sys_e;  sys_by = sys_py * inv_sys_e;  sys_bz = sys_pz * inv_sys_e
+
+        # ── Tier 1: spin correlation / polarization (helicity frame) ──
+        cos_theta_l   = _cos_helicity(lep_px, lep_py, lep_pz, lep_e,
+                                      leptop_px, leptop_py, leptop_pz, leptop_e,
+                                      sys_bx, sys_by, sys_bz)
+        cos_theta_had = _cos_helicity(down_px, down_py, down_pz, down_e,
+                                      hadtop_px, hadtop_py, hadtop_pz, hadtop_e,
+                                      sys_bx, sys_by, sys_bz)
+        c_hel = cos_theta_l * cos_theta_had
+        dphi_l_had = dphi_lh   # Δφ(l, had_top), lab (reuse signed value from above)
+
+        # ── Tier 2: tt̄ system kinematics ──
+        dy_tt = _rapidity(t_e, t_pz) - _rapidity(tb_e, tb_pz)   # Δy(t, t̄)
+        pt_tt = np.sqrt(sys_px**2 + sys_py**2)                  # pT(tt̄)
+        y_tt  = _rapidity(sys_e, sys_pz)                        # y(tt̄)
+        # dphi_tt (Δφ(t, t̄)) already computed above.
+
+        # ── {n, r, k} spin basis (Bernreuther/ATLAS convention) ──
+        # k̂ = top (t) direction in the tt̄ CM frame (t_*_cm computed above);
+        # p̂ = beam = +ẑ;  n̂ = (p̂×k̂)/sinΘ;  r̂ = (p̂ − cosΘ k̂)/sinΘ.
+        k_mag = np.maximum(np.sqrt(t_px_cm**2 + t_py_cm**2 + t_pz_cm**2), 1e-10)
+        kx, ky, kz = t_px_cm / k_mag, t_py_cm / k_mag, t_pz_cm / k_mag   # cosΘ = kz
+        sinT = np.sqrt(np.maximum(1. - kz * kz, 0.))
+        inv_sinT = np.where(sinT > 1e-6, 1. / np.maximum(sinT, 1e-10), 0.)  # 0 when t∥beam
+        nx, ny, nz = -ky * inv_sinT, kx * inv_sinT, np.zeros_like(kx)
+        rx, ry, rz = -kz * kx * inv_sinT, -kz * ky * inv_sinT, (1. - kz * kz) * inv_sinT
+
+        # analyzer directions in their parent-top rest frames
+        lep_ux, lep_uy, lep_uz = _rest_frame_dir(lep_px, lep_py, lep_pz, lep_e,
+                                                 leptop_px, leptop_py, leptop_pz, leptop_e)
+        had_ux, had_uy, had_uz = _rest_frame_dir(down_px, down_py, down_pz, down_e,
+                                                 hadtop_px, hadtop_py, hadtop_pz, hadtop_e)
+
+        # project each analyzer onto the common {n, r, k} basis
+        cos_lep_n = np.clip(lep_ux * nx + lep_uy * ny + lep_uz * nz, -1., 1.)
+        cos_lep_r = np.clip(lep_ux * rx + lep_uy * ry + lep_uz * rz, -1., 1.)
+        cos_lep_k = np.clip(lep_ux * kx + lep_uy * ky + lep_uz * kz, -1., 1.)
+        cos_had_n = np.clip(had_ux * nx + had_uy * ny + had_uz * nz, -1., 1.)
+        cos_had_r = np.clip(had_ux * rx + had_uy * ry + had_uz * rz, -1., 1.)
+        cos_had_k = np.clip(had_ux * kx + had_uy * ky + had_uz * kz, -1., 1.)
+
         return [
             sel(lep_is_negative, tbar.pt,   t.pt),    # lep_top pt
             sel(lep_is_negative, tbar.eta,  t.eta),   # lep_top eta
@@ -191,6 +318,23 @@ class SemiLepProcessor(ProcessorABC):
             [dr_lep_had],      # ΔR(l, had_top)
             [m_ttbar],         # M(tt̄)
             [cos_theta_star],  # cos θ* (production angle in ttbar CM frame)
+            # ── Tier 2: tt̄ system kinematics ──
+            [dy_tt],           # Δy(t, t̄)
+            [dphi_tt],         # Δφ(t, t̄)
+            [pt_tt],           # pT(tt̄)
+            [y_tt],            # y(tt̄)
+            # ── Tier 1: spin correlation / polarization (helicity frame) ──
+            [cos_theta_l],     # cosθ*_l   — leptonic-top analyzer = charged lepton
+            [cos_theta_had],   # cosθ*_had — hadronic-top analyzer = down-type quark
+            [c_hel],           # C_hel = cosθ_l · cosθ_had  (spin correlation)
+            [dphi_l_had],      # Δφ(l, had_top), lab
+            # ── 3D spin-basis projections (common {n,r,k}; building blocks of B/C) ──
+            [cos_lep_n],       # cosθ_n^lep
+            [cos_lep_r],       # cosθ_r^lep
+            [cos_lep_k],       # cosθ_k^lep
+            [cos_had_n],       # cosθ_n^had
+            [cos_had_r],       # cosθ_r^had
+            [cos_had_k],       # cosθ_k^had
         ]
 
     def postprocess(self, accumulator):
