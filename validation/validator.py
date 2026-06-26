@@ -58,32 +58,6 @@ def compare_features(
     return results
 
 
-# def compare_weights(
-#     a: Sample,
-#     b: Sample,
-#     *,
-#     operators: Optional[List[str]] = None,
-# ) -> Dict[str, dict]:
-#     """逐 operator 比較 direct(a)vs poly(b)的 weight 分布 per event (from Nano only)。
-#
-#     對每個 WC:回報 corr、mean±std、EFT/SM ratio 等診斷(沿用 test.py 的指標,loop 16 次)。
-#     """
-#
-#     if names is None:
-#         names = WC_NAMES
-#
-#     results = {}
-#     for name in names:
-#         wa = a["weights"][name]
-#         wb = b["weights"][name]
-#         results[name] = {
-#             "corr": float(np.corrcoef(wa, wb)[0, 1]),
-#             "max_abs_diff": float(np.max(np.abs(wa-wb))),
-#             "mean_a": float(wa.mean()), "std_a": float(wa.std()),
-#             "mean_b": float(wb.mean()), "std_b": float(wb.std()),
-#         }
-#     return results
-
 def compare_weights(direct: dict, poly: dict, *, operators=None) -> dict:
     """per-event 比 direct vs poly。兩者須來自同一份 nano、逐 event 對齊。"""
     if operators is None:
@@ -97,3 +71,48 @@ def compare_weights(direct: dict, poly: dict, *, operators=None) -> dict:
             "mean_direct": float(wd.mean()), "mean_poly": float(wp.mean()),
         }
     return results
+
+
+def _shape_chi2(N_bsm, N_sm):
+    """Pearson chi2 between shape-normalized PMFs."""
+    s_bsm, s_sm = N_bsm.sum(), N_sm.sum()
+    if s_bsm <= 0 or s_sm <= 0:
+        return 0.0
+    p_bsm = N_bsm / s_bsm
+    p_sm  = N_sm  / s_sm
+    mask = p_sm > 0
+    return float(np.sum((p_bsm[mask] - p_sm[mask]) ** 2 / p_sm[mask]))
+
+def _kl_divergence(N_bsm, N_sm):
+    """KL(BSM || SM) on shape-normalized PMFs."""
+    s_bsm, s_sm = N_bsm.sum(), N_sm.sum()
+    if s_bsm <= 0 or s_sm <= 0:
+        return 0.0
+    p_bsm = N_bsm / s_bsm
+    p_sm  = N_sm  / s_sm
+    mask = (p_bsm > 0) & (p_sm > 0)
+    return float(np.sum(p_bsm[mask] * np.log(p_bsm[mask] / p_sm[mask])))
+
+def _rate_change(w_bsm, w_sm):
+    s_sm = w_sm.sum()
+    if s_sm == 0:
+        return 0.0
+    return float((w_bsm.sum() - s_sm) / s_sm)
+
+def shape_metrics(sample, *, operators=None):
+    if operators is None:
+        operators = OPERATORS
+    rows = []
+    for fname in FEATURE_NAMES:
+        edges = get_edges(fname)
+        vals = sample["features"][fname]
+        N_sm = np.histogram(vals, bins=edges, weights=sample["weights"][SM_NAME])[0]
+        for op in operators:
+            N_op = np.histogram(vals, bins=edges, weights=sample["weights"][op])[0]
+            rows.append({
+                "feature": fname, "operator": op,
+                "chi2_shape": _shape_chi2(N_op, N_sm),
+                "kl_div":     _kl_divergence(N_op, N_sm),
+                "rate_change": _rate_change(N_op, N_sm),
+            })
+    return rows
