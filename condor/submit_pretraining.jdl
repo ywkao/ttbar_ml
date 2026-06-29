@@ -7,7 +7,7 @@ transfer_input_files  = run_batch.sh
 x509userproxy = $ENV(X509_USER_PROXY)
 
 request_cpus   = 4
-request_memory = 8192
+request_memory = 16384
 request_disk   = 20480
 
 output = logs/batch_$(batch_id).out
