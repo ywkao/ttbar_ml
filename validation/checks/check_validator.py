@@ -8,8 +8,10 @@ import os
 import csv
 import numpy as np
 from validation import nanoAOD_loader, tensor_loader, validator, utils
-from validation.schema import WC_NAMES, OPERATORS, SM_NAME
+from validation.schema import WC_NAMES, OPERATORS, SM_NAME, FEATURE_NAMES
 from validation.binning import get_edges
+
+output = "sample_validation"
 
 run_features = True
 run_nano_weights = True
@@ -25,6 +27,11 @@ run_features = True
 run_nano_weights = True
 run_tens_weights = True
 normalized = False
+
+run_features = False
+run_nano_weights = False
+run_tens_weights = True
+normalized = True
 
 nano_file = "/eos/uscms/store/user/honor/TTbarSemileptonic/modCentral/251114_001833/0000/nanogen_modCentral_1.root"
 tensor_file = "/eos/uscms/store/user/ywkao/Outputs_sbi/pretraining/train.p"
@@ -43,22 +50,23 @@ if run_features:
     for name in ["lep_pt", "njets", "cos_theta_star"]:
         print(f"{name:16s} max|Δ| = {res[name]['max_abs_diff']:.4g}")
 
-    os.makedirs("output/feature_verify", exist_ok=True)
+    os.makedirs(f"{output}/feature_verify", exist_ok=True)
     for name, r in res.items():
-        utils.overlay(name, r["edges"], r["Na"], r["Nb"], outpath=f"output/feature_verify/{name}.png")
-    print("done, 72 feature plots")
+        utils.overlay(name, r["edges"], r["Na"], r["Nb"], outpath=f"{output}/feature_verify/{name}.png")
+    print(f"done, {len(FEATURE_NAMES)} feature plots")
 
 #--------------------------------------------------
 
 if run_tens_weights:
     rows = validator.shape_metrics(tens)            # 算
-    utils.write_sensitivity_csv(rows, "output/sensitivity.csv")  # 寫檔(呈現)
+    os.makedirs(output, exist_ok=True)
+    utils.write_sensitivity_csv(rows, f"{output}/sensitivity.csv")  # 寫檔(呈現)
     utils.print_top_n(rows, n=20)                   # 印(呈現)
     utils.print_best_per_op(rows)                   # 印(呈現)
 
 
 if run_tens_weights:
-    outdir = "output/eft_overlay_tensor_norm" if normalized else "output/eft_overlay_tensor"
+    outdir = f"{output}/eft_overlay_tensor_norm" if normalized else f"{output}/eft_overlay_tensor"
     ylabel_ratio = "(normalized EFT)/(normalized SM)" if normalized else r"$c_i = 1$ / SM"
     os.makedirs(outdir, exist_ok=True)
 
@@ -86,18 +94,18 @@ if run_nano_weights:
         print(f"{name:10s} corr={r['corr']:.6f}  max|Δ|={r['max_abs_diff']:.3g}{flag}")
 
     # ── (A) 驗證圖:每個 WC 點一張 direct-vs-poly scatter ──
-    os.makedirs("output/weight_verify", exist_ok=True)
+    os.makedirs(f"{output}/weight_verify", exist_ok=True)
     for name in WC_NAMES:
         utils.weight_scatter(
             name, w["direct"][name], w["poly"][name],
             corr=res_w[name]["corr"],
-            outpath=f"output/weight_verify/{name}.png",
+            outpath=f"{output}/weight_verify/{name}.png",
         )
     print("done, 17 scatter plots (A)")
     
     # ── (B) 物理圖:每個 feature 一張 SM+16 EFT overlay ──
     # 用 poly weight(已驗證 corr=1 可信)畫 EFT 效應。注意:不 density,要看 rate+shape。
-    os.makedirs("output/eft_overlay", exist_ok=True)
+    os.makedirs(f"{output}/eft_overlay", exist_ok=True)
     for fname in nano["features"]:
         edges = get_edges(fname)
         vals = nano["features"][fname]
@@ -106,5 +114,5 @@ if run_nano_weights:
             op: np.histogram(vals, bins=edges, weights=w["direct"][op])[0]
             for op in OPERATORS
         }
-        utils.overlay_multi(fname, edges, N_sm, N_bsm, outpath=f"output/eft_overlay/{fname}.png")
-    print("done, 72 EFT overlay plots (B)")
+        utils.overlay_multi(fname, edges, N_sm, N_bsm, outpath=f"{output}/eft_overlay/{fname}.png")
+    print(f"done, {len(FEATURE_NAMES)} EFT overlay plots (B)")

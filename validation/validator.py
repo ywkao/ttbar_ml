@@ -12,7 +12,7 @@ batch merge + 無 event id 而做不到)。histogram 對 shuffle/merge 免疫。
 
 from typing import Dict, List, Optional
 import numpy as np
-from .schema import Sample, FEATURE_NAMES, WC_NAMES
+from .schema import Sample, FEATURE_NAMES, WC_NAMES, OPERATORS, SM_NAME
 from .binning import get_edges
 
 
