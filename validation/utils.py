@@ -220,3 +220,119 @@ def print_best_per_op(rows):
                    key=lambda r: r["chi2_shape"])
         print(f"{op:<8s} {best['feature']:<12s} "
               f"{best['chi2_shape']:>12.4g} {best['kl_div']:>12.4g}")
+
+
+def _fmt_sci(val: float, latex: bool = False) -> str:
+    """Format val as 2-significant-figure scientific notation, plain or LaTeX."""
+    s = f"{val:.1e}"          # e.g. "1.2e-04"
+    if not latex:
+        return s
+    mantissa, exp_str = s.split("e")
+    exp = int(exp_str)
+    return rf"${mantissa} \times 10^{{{exp}}}$"
+
+
+def print_feature_wc_table(rows, n=10, metric="chi2_shape", latex=False, transpose=True):
+    """Print a sensitivity table: top-N features (ranked by total metric) vs 16 WCs.
+
+    Args:
+        rows:      output of validator.shape_metrics().
+        n:         number of top features (default 10).
+        metric:    cell value — "chi2_shape" (default), "kl_div", or "rate_change".
+        latex:     if True, emit a LaTeX tabular environment.
+        transpose: if True (default), rows = 16 WCs, columns = top-N features.
+                   if False, rows = top-N features, columns = 16 WCs.
+    """
+    table: Dict[str, Dict[str, float]] = {}
+    for r in rows:
+        table.setdefault(r["feature"], {})[r["operator"]] = r[metric]
+
+    feature_score = {f: sum(vals.values()) for f, vals in table.items()}
+    top_features = sorted(feature_score, key=lambda f: -feature_score[f])[:n]
+
+    print(f"\n=== Top {n} features by total {metric} across 16 WCs ===")
+
+    # pre-escape feature names for LaTeX (backslash not allowed inside f-strings)
+    feat_tex = [f.replace("_", r"\_") for f in top_features]
+
+    if latex:
+        if transpose:
+            # rows = WCs, columns = top-N features
+            col_spec = "l" + "r" * len(top_features)
+            header_cells = [r"\textbf{Operator}"] + [
+                r"\textbf{" + t + "}" for t in feat_tex
+            ]
+            print(rf"\begin{{tabular}}{{{col_spec}}}")
+            print(r"\hline")
+            print(" & ".join(header_cells) + r" \\")
+            print(r"\hline")
+            for op in OPERATORS:
+                cells = [op] + [_fmt_sci(table[f].get(op, 0.0), latex=True) for f in top_features]
+                print(" & ".join(cells) + r" \\")
+            print(r"\hline")
+            total_cells = [r"\textbf{$\Sigma$(chi2)}"] + [
+                _fmt_sci(feature_score[f], latex=True) for f in top_features
+            ]
+            print(" & ".join(total_cells) + r" \\")
+            print(r"\hline")
+            print(r"\end{tabular}")
+        else:
+            # rows = top-N features, columns = WCs
+            col_spec = "l" + "r" * (len(OPERATORS) + 1)
+            header_cells = (
+                [r"\textbf{Feature}"]
+                + [rf"\textbf{{{op}}}" for op in OPERATORS]
+                + [r"\textbf{$\Sigma$(chi2)}"]
+            )
+            print(rf"\begin{{tabular}}{{{col_spec}}}")
+            print(r"\hline")
+            print(" & ".join(header_cells) + r" \\")
+            print(r"\hline")
+            for fname, fname_tex in zip(top_features, feat_tex):
+                cells = (
+                    [fname_tex]
+                    + [_fmt_sci(table[fname].get(op, 0.0), latex=True) for op in OPERATORS]
+                    + [_fmt_sci(feature_score[fname], latex=True)]
+                )
+                print(" & ".join(cells) + r" \\")
+            print(r"\hline")
+            print(r"\end{tabular}")
+    else:
+        if transpose:
+            # rows = WCs, columns = top-N features
+            op_w  = max(len("Operator"), max(len(op) for op in OPERATORS) )
+            col_w = max(9, max(len(f) for f in top_features)) + 1
+
+            header = f"{'Operator':<{op_w}s}" + "".join(f"{f:>{col_w}s}" for f in top_features)
+            sep = "-" * len(header)
+
+            print(header)
+            print(sep)
+            for op in OPERATORS:
+                vals_row = "".join(
+                    f"{_fmt_sci(table[f].get(op, 0.0)):>{col_w}s}" for f in top_features
+                )
+                print(f"{op:<{op_w}s}{vals_row}")
+            print(sep)
+            total_row = "".join(f"{_fmt_sci(feature_score[f]):>{col_w}s}" for f in top_features)
+            print(f"{'Σ(chi2)':<{op_w}s}{total_row}")
+            print()
+        else:
+            # rows = top-N features, columns = WCs
+            col_w  = 10
+            feat_w = 16
+            header = (
+                f"{'Rank':<4s} {'Feature':<{feat_w}s}"
+                + "".join(f"{op:>{col_w}s}" for op in OPERATORS)
+                + f"{'Σ(chi2)':>{col_w}s}"
+            )
+            sep = "-" * len(header)
+
+            print(header)
+            print(sep)
+            for rank, fname in enumerate(top_features, 1):
+                cells = "".join(
+                    f"{_fmt_sci(table[fname].get(op, 0.0)):>{col_w}s}" for op in OPERATORS
+                )
+                print(f"{rank:<4d} {fname:<{feat_w}s}{cells}{_fmt_sci(feature_score[fname]):>{col_w}s}")
+            print()
