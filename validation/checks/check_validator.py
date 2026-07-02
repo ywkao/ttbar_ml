@@ -40,8 +40,10 @@ def parse_args():
                    help="metric shown in the feature-WC table")
     g.add_argument("--top-n",  type=int, default=10,
                    help="number of feature rows in the table")
-    g.add_argument("--latex",  action="store_true",
+    g.add_argument("--latex",   action="store_true",
                    help="print feature-WC table as LaTeX tabular")
+    g.add_argument("--heatmap", action="store_true",
+                   help="2D sensitivity heatmap (y=WC, x=per-WC rank, z=chi2/Σchi2)")
 
     # ── overlay options (--eft-overlay / --nano-weights) ──
     g = p.add_argument_group("overlay options")
@@ -64,7 +66,7 @@ def main():
     output = args.output
 
     need_nano   = args.features or args.nano_weights
-    need_tensor = args.features or args.tens_weights or args.eft_overlay
+    need_tensor = args.features or args.tens_weights or args.eft_overlay or args.heatmap
 
     if need_nano:
         nano = nanoAOD_loader.load([args.nano_file], with_weights=True, nevents=args.nevents)
@@ -84,13 +86,20 @@ def main():
         print(f"done, {len(FEATURE_NAMES)} feature plots")
 
     # ── Block 2: EFT sensitivity from tensor weights ──
-    if args.tens_weights:
+    if args.tens_weights or args.heatmap:
         rows = validator.shape_metrics(tens)
         os.makedirs(output, exist_ok=True)
+    if args.tens_weights:
         utils.write_sensitivity_csv(rows, f"{output}/sensitivity.csv")
         utils.print_top_n(rows, n=20)
         utils.print_best_per_op(rows)
         utils.print_feature_wc_table(rows, n=args.top_n, metric=args.metric, latex=args.latex)
+    if args.heatmap:
+        utils.plot_sensitivity_heatmap(
+            rows, n=args.top_n, metric=args.metric,
+            outpath=f"{output}/sensitivity_heatmap.png",
+        )
+        print(f"done, sensitivity heatmap → {output}/sensitivity_heatmap.png")
 
     # ── Block 3: EFT overlay plots from tensor ──
     if args.eft_overlay:

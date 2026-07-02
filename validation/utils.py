@@ -212,6 +212,64 @@ def print_top_n(rows, n=20):
               f"{r['rate_change']:>+14.3%}")
 
 
+def plot_sensitivity_heatmap(rows, n=10, metric="chi2_shape", outpath=None):
+    """2D heatmap: y = 16 WCs, x = per-WC feature rank (1…n).
+    Color = metric / Σmetric (row-normalised per WC).
+    Cell text = feature name at that rank.
+
+    Args:
+        rows:   output of validator.shape_metrics().
+        n:      number of top features per WC to show (default 10).
+        metric: "chi2_shape" (default), "kl_div", or "rate_change".
+        outpath: save path; None returns the figure.
+    """
+    import matplotlib.pyplot as plt
+
+    # {operator: {feature: value}}
+    table: Dict[str, Dict[str, float]] = {}
+    for r in rows:
+        table.setdefault(r["operator"], {})[r["feature"]] = r[metric]
+
+    n_ops  = len(OPERATORS)
+    z      = np.zeros((n_ops, n))
+    labels = [[""] * n for _ in range(n_ops)]
+
+    for i, op in enumerate(OPERATORS):
+        op_vals = table.get(op, {})
+        total   = sum(op_vals.values())
+        ranked  = sorted(op_vals, key=lambda f: -op_vals[f])[:n]
+        for j, fname in enumerate(ranked):
+            z[i, j]      = op_vals[fname] / total if total > 0 else 0.0
+            labels[i][j] = fname
+
+    fig, ax = plt.subplots(figsize=(n * 1.8 + 1.5, n_ops * 0.65 + 1.2))
+
+    if metric == "rate_change":
+        vmax = np.abs(z).max() or 1.0
+        im = ax.imshow(z, aspect="auto", cmap="RdBu_r", vmin=-vmax, vmax=vmax)
+    else:
+        im = ax.imshow(z, aspect="auto", cmap="YlOrRd", vmin=0)
+
+    # cell text; switch to white when background is dark
+    thresh = z.max() * 0.6
+    for i in range(n_ops):
+        for j in range(n):
+            color = "white" if z[i, j] > thresh else "black"
+            ax.text(j, i, labels[i][j],
+                    ha="center", va="center", fontsize=8, color=color)
+
+    ax.set_xticks(range(n))
+    ax.set_xticklabels([f"#{j+1}" for j in range(n)], fontsize=9)
+    ax.set_yticks(range(n_ops))
+    ax.set_yticklabels(OPERATORS, fontsize=9)
+    ax.set_xlabel("Feature rank (per operator)")
+    ax.set_title(f"Per-operator feature sensitivity   {metric} / Σ{metric}")
+    plt.colorbar(im, ax=ax, label=f"{metric} / Σ{metric}", fraction=0.02, pad=0.02)
+    fig.tight_layout()
+
+    return _finish(fig, "sensitivity_heatmap", outpath)
+
+
 def print_best_per_op(rows):
     print(f"\n=== Best feature for each operator (by shape chi2) ===")
     print(f"{'operator':<8s} {'best feature':<12s} {'chi2_shape':>12s} {'KL_div':>12s}")
