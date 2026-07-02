@@ -40,24 +40,28 @@ def _cos_helicity(a_px, a_py, a_pz, a_e,
                   sys_bx, sys_by, sys_bz):
     """cos of the angle, in the parent-top rest frame, between a spin-analyzer's
     direction and the helicity axis (the parent-top flight direction in the tt̄ CM
-    frame). The analyzer is boosted into the top rest frame; the top is boosted into
-    the tt̄ CM frame to define the axis. Returns cosθ in [-1, 1]."""
-    inv_te = 1. / np.maximum(top_e, 1e-10)
-    ax, ay, az, _ = _boost_into(a_px, a_py, a_pz, a_e,
-                                top_px * inv_te, top_py * inv_te, top_pz * inv_te)
-    amag = np.sqrt(ax * ax + ay * ay + az * az)
+    frame). The analyzer is boosted lab -> tt̄ ZMF -> top rest frame; the top is
+    boosted into the tt̄ CM frame to define the axis. Returns cosθ in [-1, 1]."""
+    ux, uy, uz = _rest_frame_dir(a_px, a_py, a_pz, a_e,
+                                 top_px, top_py, top_pz, top_e,
+                                 sys_bx, sys_by, sys_bz)
     hx, hy, hz, _ = _boost_into(top_px, top_py, top_pz, top_e, sys_bx, sys_by, sys_bz)
-    hmag = np.sqrt(hx * hx + hy * hy + hz * hz)
-    cos = (ax * hx + ay * hy + az * hz) / np.maximum(amag * hmag, 1e-10)
+    hmag = np.maximum(np.sqrt(hx * hx + hy * hy + hz * hz), 1e-10)
+    cos = (ux * hx + uy * hy + uz * hz) / hmag
     return np.clip(cos, -1., 1.)
 
 
-def _rest_frame_dir(a_px, a_py, a_pz, a_e, top_px, top_py, top_pz, top_e):
-    """Unit direction of an analyzer in its parent-top rest frame.
+def _rest_frame_dir(a_px, a_py, a_pz, a_e, top_px, top_py, top_pz, top_e,
+                    sys_bx, sys_by, sys_bz):
+    """Unit direction of an analyzer in its parent-top rest frame, reached via
+    the tt̄ ZMF (lab -> ZMF -> top rest). The two-step chain is required: a
+    direct lab -> top boost differs from it by a Wigner rotation.
     Returns (ux, uy, uz) numpy arrays."""
-    inv_te = 1. / np.maximum(top_e, 1e-10)
-    rx, ry, rz, _ = _boost_into(a_px, a_py, a_pz, a_e,
-                                top_px * inv_te, top_py * inv_te, top_pz * inv_te)
+    ax, ay, az, ae = _boost_into(a_px, a_py, a_pz, a_e, sys_bx, sys_by, sys_bz)
+    tx, ty, tz, te = _boost_into(top_px, top_py, top_pz, top_e, sys_bx, sys_by, sys_bz)
+    inv_te = 1. / np.maximum(te, 1e-10)
+    rx, ry, rz, _ = _boost_into(ax, ay, az, ae,
+                                tx * inv_te, ty * inv_te, tz * inv_te)
     mag = np.maximum(np.sqrt(rx * rx + ry * ry + rz * rz), 1e-10)
     return rx / mag, ry / mag, rz / mag
 
@@ -317,7 +321,6 @@ class SemiLepProcessor(ProcessorABC):
         dy_tt = _rapidity(t_e, t_pz) - _rapidity(tb_e, tb_pz)   # Δy(t, t̄)
         pt_tt = np.sqrt(sys_px**2 + sys_py**2)                  # pT(tt̄)
         y_tt  = _rapidity(sys_e, sys_pz)                        # y(tt̄)
-        # dphi_tt (Δφ(t, t̄)) already computed above.
 
         # ── {n, r, k} spin basis (Bernreuther/ATLAS convention) ──
         # k̂ = top (t) direction in the tt̄ CM frame (t_*_cm computed above);
@@ -331,9 +334,11 @@ class SemiLepProcessor(ProcessorABC):
 
         # analyzer directions in their parent-top rest frames
         lep_ux, lep_uy, lep_uz = _rest_frame_dir(lep_px, lep_py, lep_pz, lep_e,
-                                                 leptop_px, leptop_py, leptop_pz, leptop_e)
+                                                 leptop_px, leptop_py, leptop_pz, leptop_e,
+                                                 sys_bx, sys_by, sys_bz)
         had_ux, had_uy, had_uz = _rest_frame_dir(down_px, down_py, down_pz, down_e,
-                                                 hadtop_px, hadtop_py, hadtop_pz, hadtop_e)
+                                                 hadtop_px, hadtop_py, hadtop_pz, hadtop_e,
+                                                 sys_bx, sys_by, sys_bz)
 
         # project each analyzer onto the common {n, r, k} basis
         cos_lep_n = np.clip(lep_ux * nx + lep_uy * ny + lep_uz * nz, -1., 1.)
@@ -344,12 +349,8 @@ class SemiLepProcessor(ProcessorABC):
         cos_had_k = np.clip(had_ux * kx + had_uy * ky + had_uz * kz, -1., 1.)
 
         # ── opening-angle spin observables (rest-frame analyzer directions) ──
-        # c_hel = û_l · û_had = cos of the opening angle between the two analyzers
-        # in their parent-top rest frames; ⟨c_hel⟩ = −D/3 (entanglement D-marker).
         c_hel = np.clip(lep_ux * had_ux + lep_uy * had_uy + lep_uz * had_uz, -1., 1.)
-        # c_han: n+r−k combination of the common-basis projections (Bell-type).
         c_han = np.clip(c_hel - 2. * cos_lep_k * cos_had_k, -1., 1.)
-        # β* of the leptonic top in the hadronic-top rest frame (relative tt̄ velocity)
         beta_t_star = _beta_t_star(leptop_px, leptop_py, leptop_pz, leptop_e,
                                    hadtop_px, hadtop_py, hadtop_pz, hadtop_e)
 

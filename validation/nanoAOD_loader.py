@@ -56,7 +56,12 @@ def _cart(pt, eta, phi, mass):
     return px, py, pz, np.sqrt(px * px + py * py + pz * pz + mass * mass)
 
 
-def _rest_dir(apx, apy, apz, ae, tpx, tpy, tpz, te):
+def _rest_dir(apx, apy, apz, ae, tpx, tpy, tpz, te, sbx, sby, sbz):
+    """Analyzer unit direction in its parent-top rest frame, reached via the
+    tt̄ ZMF (lab -> ZMF -> top rest). The two-step chain is required: a direct
+    lab -> top boost differs from it by a Wigner rotation."""
+    apx, apy, apz, ae = _boost(apx, apy, apz, ae, sbx, sby, sbz)
+    tpx, tpy, tpz, te = _boost(tpx, tpy, tpz, te, sbx, sby, sbz)
     inv = 1. / np.maximum(te, 1e-10)
     rx, ry, rz, _ = _boost(apx, apy, apz, ae, tpx * inv, tpy * inv, tpz * inv)
     mag = np.maximum(np.sqrt(rx * rx + ry * ry + rz * rz), 1e-10)
@@ -64,7 +69,7 @@ def _rest_dir(apx, apy, apz, ae, tpx, tpy, tpz, te):
 
 
 def _cos_hel(apx, apy, apz, ae, tpx, tpy, tpz, te, sbx, sby, sbz):
-    ux, uy, uz = _rest_dir(apx, apy, apz, ae, tpx, tpy, tpz, te)
+    ux, uy, uz = _rest_dir(apx, apy, apz, ae, tpx, tpy, tpz, te, sbx, sby, sbz)
     hx, hy, hz, _ = _boost(tpx, tpy, tpz, te, sbx, sby, sbz)
     hmag = np.maximum(np.sqrt(hx * hx + hy * hy + hz * hz), 1e-10)
     return np.clip((ux * hx + uy * hy + uz * hz) / hmag, -1., 1.)
@@ -224,9 +229,11 @@ def load(
         nx, ny, nz = -ky * inv_sinT, kx * inv_sinT, np.zeros_like(kx)
         rx, ry, rz = -kz * kx * inv_sinT, -kz * ky * inv_sinT, (1. - kz * kz) * inv_sinT
         lux, luy, luz = _rest_dir(lep_px, lep_py, lep_pz, lep_e,
-                                  leptop_px, leptop_py, leptop_pz, leptop_e)
+                                  leptop_px, leptop_py, leptop_pz, leptop_e,
+                                  sbx, sby, sbz)
         hux, huy, huz = _rest_dir(down_px, down_py, down_pz, down_e,
-                                  hadtop_px, hadtop_py, hadtop_pz, hadtop_e)
+                                  hadtop_px, hadtop_py, hadtop_pz, hadtop_e,
+                                  sbx, sby, sbz)
         cos_lep_n = np.clip(lux * nx + luy * ny + luz * nz, -1., 1.)
         cos_lep_r = np.clip(lux * rx + luy * ry + luz * rz, -1., 1.)
         cos_lep_k = np.clip(lux * kx + luy * ky + luz * kz, -1., 1.)
