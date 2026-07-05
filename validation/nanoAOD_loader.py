@@ -141,6 +141,11 @@ def load(
         t_gp    = ak.pad_none(gp[is_final & (gp.pdgId ==  6)], 1)[:, 0]
         tbar_gp = ak.pad_none(gp[is_final & (gp.pdgId == -6)], 1)[:, 0]
 
+        ### # 放在 line 139 gp = events.GenPart[mask] 之後
+        ### par = ak.fill_none(abs(gp.distinctParent.pdgId), 0)
+        ### has_hadtau = ak.to_numpy(ak.any((abs(gp.pdgId) == 15) & (par == 24), axis=1))
+        ### # 注意:這會把 tau->e/mu 也砍掉;gen-level validation 用這個粗粒度通常可接受
+
         def to_np(arr):
             return ak.to_numpy(ak.fill_none(arr, 0.)).astype(float)
 
@@ -200,12 +205,20 @@ def load(
         hadtop_px = np.where(lep_is_neg, t_px, tb_px);  hadtop_py = np.where(lep_is_neg, t_py, tb_py)
         hadtop_pz = np.where(lep_is_neg, t_pz, tb_pz);  hadtop_e  = np.where(lep_is_neg, t_e,  tb_e)
 
+
         # hadronic spin analyzer: the hard-process down-type quark (d/s) from the
         # hadronic W. Require parent == W to exclude initial-state (status-21) d/s
         # partons that the bare |pdgId|∈{1,3} cut would otherwise pick up.
-        down_all = gp[is_final & ((abs(gp.pdgId) == 1) | (abs(gp.pdgId) == 3))]
-        down = ak.pad_none(
-            down_all[ak.fill_none(abs(down_all.distinctParent.pdgId) == 24, False)], 1)[:, 0]
+        ### down_all = gp[is_final & ((abs(gp.pdgId) == 1) | (abs(gp.pdgId) == 3))]
+        ### down = ak.pad_none( down_all[ak.fill_none(abs(down_all.distinctParent.pdgId) == 24, False)], 1)[:, 0]
+
+        # hard-process down-type quark from the hadronic W.
+        # status==23 (hard-process outgoing) excludes initial-state (status-21)
+        # d/s partons, so no parent cut is needed. Unlike the previous
+        # distinctParent==W approach, this does not rely on the mother chain
+        # surviving NanoGen GenPart pruning (which orphaned ~2.4% of events).
+        down_all = gp[(gp.status == 23) & ((abs(gp.pdgId) == 1) | (abs(gp.pdgId) == 3))]
+        down = ak.pad_none(down_all, 1)[:, 0]
         down_px, down_py, down_pz, down_e = _cart(
             to_np(down.pt), to_np(down.eta), to_np(down.phi), to_np(down.mass))
 
@@ -246,6 +259,43 @@ def load(
         c_han = np.clip(c_hel - 2. * cos_lep_k * cos_had_k, -1., 1.)
         beta_t_star = _beta_t_star(leptop_px, leptop_py, leptop_pz, leptop_e,
                                    hadtop_px, hadtop_py, hadtop_pz, hadtop_e)
+
+        # --- debug --- #
+        bad_lep = (lux == 0) & (luy == 0) & (luz == 0)
+        bad_had = (hux == 0) & (huy == 0) & (huz == 0)
+        print(f"[DEBUG] bad_lep.sum() = {bad_lep.sum()}, bad_had.sum() = {bad_had.sum()}")
+
+        bad_idx = np.where(bad_had)[0]
+        print(f"[DEBUG] down_e[bad_idx][:10] = {down_e[bad_idx][:10]}")          # 確認是 0-padding
+
+        # --- debug 2: classify the 99 bad events --- #
+        gpb = gp[bad_idx]
+        parid = ak.fill_none(abs(gpb.distinctParent.pdgId), 0)
+
+        has_tau  = ak.to_numpy(ak.any((abs(gpb.pdgId) == 15) & (parid == 24), axis=1))
+        has_bW   = ak.to_numpy(ak.any((abs(gpb.pdgId) == 5)  & (parid == 24)
+                                      & gpb.hasFlags(["fromHardProcess"]), axis=1))
+        # d/s 存在且過了 is_final,但 distinctParent 追不到 W
+        isf  = gpb.hasFlags(["fromHardProcess", "isLastCopy"])
+        ds   = isf & ((abs(gpb.pdgId) == 1) | (abs(gpb.pdgId) == 3))
+        has_orphan = ak.to_numpy(ak.any(ds, axis=1)) & ~ak.to_numpy(ak.any(ds & (parid == 24), axis=1))
+
+        n_tau, n_b, n_orph = has_tau.sum(), has_bW.sum(), has_orphan.sum()
+        n_other = len(bad_idx) - (has_tau | has_bW | has_orphan).sum()
+        print(f"[DEBUG] tau={n_tau}  W->cb={n_b}  orphan d/s={n_orph}  other={n_other}")
+
+        dsq = gpb[ds]
+        print("[DEBUG] orphan d/s parent pdgId:", ak.flatten(ak.fill_none(dsq.distinctParent.pdgId, 0)).tolist()[:20])
+
+        # 印一個 "other" event 的完整衰變記錄看看
+        rest = bad_idx[~(has_tau | has_bW | has_orphan)]
+        if len(rest):
+            g0 = gp[rest[0]]
+            hp = g0[g0.hasFlags(["fromHardProcess"])]
+            print("[DEBUG] example other event, hard-process particles:")
+            print("  pdgId :", hp.pdgId.tolist())
+            print("  status:", hp.status.tolist())
+            print("  mother:", ak.fill_none(hp.distinctParent.pdgId, 0).tolist())
 
         # ── Tier 3 (index 57-73): pairwise lepton-jet / jet-jet geometry & masses ──
         j_eta = [ak.to_numpy(jets.eta[:, i]).astype(float)  for i in range(4)]
