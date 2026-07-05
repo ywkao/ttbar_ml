@@ -290,13 +290,13 @@ class SemiLepProcessor(ProcessorABC):
         hadtop_e  = np.where(lep_from_tbar, t_e,  tb_e)
 
         # ── hadronic spin analyzer: down-type quark (d/s) from the hadronic W ──
-        # Require the quark's parent to be a W: the bare |pdgId|∈{1,3} selection also
-        # tags INITIAL-STATE (status-21) d/s partons from qq̄ initiation, which sit at
-        # the front of GenPart and lie along the beam (pt≈0, |eta|→∞ → sinh overflow).
-        # The W-parent cut keeps exactly the hadronic-W down-type quark.
-        down_all   = genparts[is_final & ((abs(genparts.pdgId) == 1) |
-                                          (abs(genparts.pdgId) == 3))]
-        down_from_w = ak.fill_none(abs(down_all.distinctParent.pdgId) == 24, False)
+        # hard-process down-type quark from the hadronic W.
+        # status==23 (hard-process outgoing) excludes initial-state (status-21)
+        # d/s partons, so no parent cut is needed. Unlike the previous
+        # distinctParent==W approach, this does not rely on the mother chain
+        # surviving NanoGen GenPart pruning (which orphaned ~2.4% of events).
+        down_all = gp[(gp.status == 23) & ((abs(gp.pdgId) == 1) | (abs(gp.pdgId) == 3))]
+        down = ak.pad_none(down_all, 1)[:, 0]
         down_quark = ak.pad_none(down_all[down_from_w], 1)[:, 0]
         down_pt   = to_np(down_quark.pt);   down_eta  = np.clip(to_np(down_quark.eta), -10., 10.)
         down_phi  = to_np(down_quark.phi);  down_mass = to_np(down_quark.mass)
@@ -353,6 +353,11 @@ class SemiLepProcessor(ProcessorABC):
         c_han = np.clip(c_hel - 2. * cos_lep_k * cos_had_k, -1., 1.)
         beta_t_star = _beta_t_star(leptop_px, leptop_py, leptop_pz, leptop_e,
                                    hadtop_px, hadtop_py, hadtop_pz, hadtop_e)
+
+        bad = ((had_ux == 0) & (had_uy == 0) & (had_uz == 0)) | \
+              ((lep_ux == 0) & (lep_uy == 0) & (lep_uz == 0))
+        if bad.any():
+            print(f"[WARN] {f}: {int(bad.sum())}/{len(bad)} events with failed analyzer matching")
 
         return [
             sel(lep_is_negative, tbar.pt,   t.pt),    # lep_top pt
