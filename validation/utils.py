@@ -213,8 +213,8 @@ def print_top_n(rows, n=20):
 
 
 def plot_sensitivity_heatmap(rows, n=10, metric="chi2_shape", outpath=None):
-    """2D heatmap: y = 16 WCs, x = per-WC feature rank (1…n).
-    Color = metric / Σmetric (row-normalised per WC).
+    """2D heatmap: y = per-WC feature rank (1…n), x = 16 WCs.
+    Color = metric / Σmetric (column-normalised per WC).
     Cell text = feature name at that rank.
 
     Args:
@@ -231,18 +231,19 @@ def plot_sensitivity_heatmap(rows, n=10, metric="chi2_shape", outpath=None):
         table.setdefault(r["operator"], {})[r["feature"]] = r[metric]
 
     n_ops  = len(OPERATORS)
-    z      = np.zeros((n_ops, n))
-    labels = [[""] * n for _ in range(n_ops)]
+    # z[rank, op] so operators sit on x-axis and feature rank on y-axis
+    z      = np.zeros((n, n_ops))
+    labels = [[""] * n_ops for _ in range(n)]
 
     for i, op in enumerate(OPERATORS):
         op_vals = table.get(op, {})
         total   = sum(op_vals.values())
         ranked  = sorted(op_vals, key=lambda f: -op_vals[f])[:n]
         for j, fname in enumerate(ranked):
-            z[i, j]      = op_vals[fname] / total if total > 0 else 0.0
-            labels[i][j] = fname
+            z[j, i]      = op_vals[fname] / total if total > 0 else 0.0
+            labels[j][i] = fname
 
-    fig, ax = plt.subplots(figsize=(n * 1.8 + 1.5, n_ops * 0.65 + 1.2))
+    fig, ax = plt.subplots(figsize=(n_ops * 1.2 + 1.5, n * 0.4 + 1.5))
 
     if metric == "rate_change":
         vmax = np.abs(z).max() or 1.0
@@ -252,17 +253,19 @@ def plot_sensitivity_heatmap(rows, n=10, metric="chi2_shape", outpath=None):
 
     # cell text; switch to white when background is dark
     thresh = z.max() * 0.6
-    for i in range(n_ops):
-        for j in range(n):
-            color = "white" if z[i, j] > thresh else "black"
-            ax.text(j, i, labels[i][j],
-                    ha="center", va="center", fontsize=8, color=color)
+    fsize  = max(5, 8 - n // 20)   # shrink font for large n
+    for j in range(n):
+        for i in range(n_ops):
+            color = "white" if z[j, i] > thresh else "black"
+            ax.text(i, j, labels[j][i],
+                    ha="center", va="center", fontsize=fsize, color=color)
 
-    ax.set_xticks(range(n))
-    ax.set_xticklabels([f"#{j+1}" for j in range(n)], fontsize=9)
-    ax.set_yticks(range(n_ops))
-    ax.set_yticklabels(OPERATORS, fontsize=9)
-    ax.set_xlabel("Feature rank (per operator)")
+    ax.set_xticks(range(n_ops))
+    ax.set_xticklabels(OPERATORS, fontsize=9, rotation=45, ha="right")
+    ax.set_yticks(range(n))
+    ax.set_yticklabels([f"#{j+1}" for j in range(n)], fontsize=9)
+    ax.invert_yaxis()
+    ax.set_ylabel("Feature rank (per operator)")
     ax.set_title(f"Per-operator feature sensitivity   {metric} / Σ{metric}")
     plt.colorbar(im, ax=ax, label=f"{metric} / Σ{metric}", fraction=0.02, pad=0.02)
     fig.tight_layout()

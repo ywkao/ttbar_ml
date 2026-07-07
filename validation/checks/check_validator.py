@@ -44,6 +44,10 @@ def parse_args():
                    help="print feature-WC table as LaTeX tabular")
     g.add_argument("--heatmap", action="store_true",
                    help="2D sensitivity heatmap (y=WC, x=per-WC rank, z=chi2/Σchi2)")
+    g.add_argument("--wc-value", type=float, default=1.0,
+                   help="operator coefficient used to reconstruct tensor-side "
+                        "BSM weights (SM term is always cSM=1); affects "
+                        "--tens-weights/--heatmap/--eft-overlay, not --nano-weights")
 
     # ── overlay options (--eft-overlay / --nano-weights) ──
     g = p.add_argument_group("overlay options")
@@ -72,7 +76,12 @@ def main():
         nano = nanoAOD_loader.load([args.nano_file], with_weights=True, nevents=args.nevents)
 
     if need_tensor:
-        tens = tensor_loader.load([args.tensor_file], with_weights=True)
+        tens = tensor_loader.load([args.tensor_file], with_weights=True,
+                                   wc_value=args.wc_value)
+
+    # suffix tensor-weight-derived output names when wc_value deviates from
+    # the nano-side reference point (1.0), so runs don't clobber each other
+    wc_suffix = "" if args.wc_value == 1.0 else f"_wc{args.wc_value:g}"
 
     # ── Block 1: feature histograms — nano vs tensor ──
     if args.features:
@@ -90,23 +99,24 @@ def main():
         rows = validator.shape_metrics(tens)
         os.makedirs(output, exist_ok=True)
     if args.tens_weights:
-        utils.write_sensitivity_csv(rows, f"{output}/sensitivity.csv")
+        utils.write_sensitivity_csv(rows, f"{output}/sensitivity{wc_suffix}.csv")
         utils.print_top_n(rows, n=20)
         utils.print_best_per_op(rows)
         utils.print_feature_wc_table(rows, n=args.top_n, metric=args.metric, latex=args.latex)
     if args.heatmap:
+        heatmap_path = f"{output}/sensitivity_heatmap{wc_suffix}.png"
         utils.plot_sensitivity_heatmap(
             rows, n=args.top_n, metric=args.metric,
-            outpath=f"{output}/sensitivity_heatmap.png",
+            outpath=heatmap_path,
         )
-        print(f"done, sensitivity heatmap → {output}/sensitivity_heatmap.png")
+        print(f"done, sensitivity heatmap → {heatmap_path}")
 
     # ── Block 3: EFT overlay plots from tensor ──
     if args.eft_overlay:
-        outdir = (f"{output}/eft_overlay_tensor_norm" if args.normalized
-                  else f"{output}/eft_overlay_tensor")
+        outdir = (f"{output}/eft_overlay_tensor_norm{wc_suffix}" if args.normalized
+                  else f"{output}/eft_overlay_tensor{wc_suffix}")
         ylabel_ratio = ("(normalized EFT)/(normalized SM)" if args.normalized
-                        else r"$c_i = 1$ / SM")
+                        else rf"$c_i = {args.wc_value:g}$ / SM")
         os.makedirs(outdir, exist_ok=True)
         for fname in tens["features"]:
             edges = get_edges(fname)

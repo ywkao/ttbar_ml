@@ -22,6 +22,7 @@ def load(
     paths: List[str],
     *,
     with_weights: bool = False,
+    wc_value: float = 1.0,
 ) -> Sample:
     """載入一個或多個 .p 檔,合併成單一 Sample。
 
@@ -29,6 +30,9 @@ def load(
         paths: .p 檔路徑列表。可給多個(例如 train+test+val)以還原 split 前的全集;
                histogram 對 shuffle 免疫,所以合併順序無所謂。
         with_weights: 階段 2 設 False(只切 feature);階段 3 設 True 才重建 weight。
+        wc_value: 重建 BSM weight 時,operator 係數設的值(SM 項恆為 cSM=1)。
+                  注意這只影響 tensor 側重建,不對應任何實際 LHE reweight point,
+                  純粹用來看不同 WC 尺度下的 shape/sensitivity。
 
     Returns:
         Sample,符合 schema 契約。
@@ -53,7 +57,7 @@ def load(
     print(feats.shape, coefs.shape)
 
     features = {name: feats[:, idx] for name, idx in FEATURE_INDEX.items()}
-    weights = _reconstruct_weights(coefs) if with_weights else {}
+    weights = _reconstruct_weights(coefs, wc_value=wc_value) if with_weights else {}
 
     sample: Sample = {"features": features, "weights": weights}
     validate_sample(sample, require_weights=with_weights)
@@ -61,25 +65,28 @@ def load(
     return sample
 
 
-def _reconstruct_weights(coefs) -> dict:
+def _reconstruct_weights(coefs, *, wc_value: float = 1.0) -> dict:
     """由 fit_coefs (n, 153) 多項式重建 SM + 16 operator 的 weight。
 
     對每個 WC 點 c(長度 17 的 SM-inclusive 向量),weight = coefs @ vec(outer(c, c))。
     vec 是 153 維上三角 packing,off-diagonal 的 √2 / ×2 慣例必須與 ml_data 存檔時、
     與 nano 重建時三邊一致(階段 3 開頭要先核這個慣例)。
 
-    實作待辦(階段 3)。
+    Args:
+        wc_value: 指定 operator 的係數(SM 項恆為 cSM=1)。wc_value=1.0 時與
+                  nano 側的 direct/poly 比對點一致;其他值純粹是 tensor 側的
+                  外插檢視,無對應的 LHE reweight point。
     """
     import numpy as np
     from pretraining.fitCoefficients import vec, wcs as FIT_WCS
     n_wc = len(FIT_WCS) # 17
 
     def c_vector(op_name):
-        """建一個 SM-inclusive 的 WC 向量:cSM=1,指定 operator=1,其餘 0。"""
+        """建一個 SM-inclusive 的 WC 向量:cSM=1,指定 operator=wc_value,其餘 0。"""
         c = np.zeros(n_wc)
         c[FIT_WCS.index('cSM')] = 1.0          # 一律含 SM 項
         if op_name != SM_NAME:              # SM 點就只有 cSM
-            c[FIT_WCS.index(op_name)] = 1.0    # 用 FIT_WCS 定位,不是 WC_NAMES!
+            c[FIT_WCS.index(op_name)] = wc_value  # 用 FIT_WCS 定位,不是 WC_NAMES!
         return c
 
     weights = {}
