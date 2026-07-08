@@ -1,21 +1,19 @@
 """
-binning.py — 共享的 bin edges 設定(契約層)。
+binning.py — shared bin-edges config (contract layer).
 
-為什麼要獨立一個檔案、兩個 loader 共用:
-  histogram-level 比較成立的前提是「兩邊用同一組 bin edges」。
-  ipynb 的做法是 np.linspace(vals.min(), vals.max(), ...) — range 依賴資料本身,
-  nano 與 tensor 的 min/max 必然不同,bin edges 就不同,histogram 天生對不齊。
-  所以 range 必須寫死成共享常數,不能從資料推。
+Bin edges are hardcoded per feature, not derived from data.min()/max():
+a histogram-level comparison only holds if both sides use identical edges,
+and nano vs tensor will generally have different min/max.
 
-涵蓋全部 74 個 feature(原 41 個沿用既有 BINNING;新增 33 個:角度/cos 類用
-[-1,1] 或 [-π,π],質量類給合理上限)。
+Covers all 74 features: angle/cos-type features use [-1,1] or [-π,π],
+mass-type features get a reasonable upper bound.
 """
 
 import numpy as np
 from .schema import FEATURE_NAMES
 
 
-# 每個 feature: (nbins, lo, hi)
+# per feature: (nbins, lo, hi)
 BINNING = {
     "lep_pt":   (50,  0,    500),
     "lep_eta":  (50, -3,      3),
@@ -73,15 +71,16 @@ for _p in ("01", "02", "03", "12", "13", "23"):
     BINNING[f"m_j{_p}"]  = (50, 0, 500)
 BINNING["m_lb_min"] = (50, 0, 300)
 
-# 契約自檢:binning 必須剛好覆蓋 74 個權威 feature,不多不少。
+# Contract self-check: binning must cover exactly the 74 authoritative
+# features, no more, no less.
 _missing = [n for n in FEATURE_NAMES if n not in BINNING]
 _extra = [n for n in BINNING if n not in FEATURE_NAMES]
-assert not _missing, f"binning 缺少 feature: {_missing}"
-assert not _extra, f"binning 有多餘的 key(不在權威表內): {_extra}"
+assert not _missing, f"binning is missing features: {_missing}"
+assert not _extra, f"binning has extra keys not in FEATURE_NAMES: {_extra}"
 
 
 def get_edges(name: str) -> np.ndarray:
-    """回傳某 feature 的 bin edges 陣列,長度 = nbins + 1。"""
+    """Return the bin-edges array for a feature, length = nbins + 1."""
     nb, lo, hi = BINNING[name]
     return np.linspace(lo, hi, nb + 1)
 

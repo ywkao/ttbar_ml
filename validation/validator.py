@@ -1,13 +1,16 @@
 """
-validator.py — source-agnostic 比較層。
+validator.py — source-agnostic comparison layer.
 
-只吃兩個 Sample(符合 schema 契約),不知道也不該知道誰是 nano、誰是 tensor。
-兩個正交的比較:
-  - compare_features : 純運動學,WC-independent。共享 binning 後比 histogram。
-  - compare_weights  : 16 operator,direct vs poly。(階段 3)
+Only consumes two Sample objects (satisfying the schema contract); it never
+knows, and shouldn't need to know, which one is nano and which is tensor.
+Two orthogonal comparisons:
+  - compare_features : pure kinematics, WC-independent. Histograms compared
+                        after sharing binning.
+  - compare_weights  : 16 operators, direct vs poly.
 
-比較強度:histogram-level(階段 0 審計結論 — per-event 因 random_split shuffle +
-batch merge + 無 event id 而做不到)。histogram 對 shuffle/merge 免疫。
+Comparison granularity is histogram-level, not per-event: per-event
+comparison isn't possible because of random_split shuffling, batch merging,
+and the absence of an event id. Histograms are immune to shuffling/merging.
 """
 
 from typing import Dict, List, Optional
@@ -23,21 +26,20 @@ def compare_features(
     names: Optional[List[str]] = None,
     density: bool = True,
 ) -> Dict[str, dict]:
-    """逐 feature 比較兩個 Sample 的 histogram。
+    """Compare the histograms of two Samples feature-by-feature.
 
     Args:
-        a, b: 兩個待比 Sample(慣例:a=nano, b=tensor,但邏輯對稱)。
-        names: 要比的 feature 子集,None = 全部 72 個。
-        density: True 則各自正規化成面積=1 再比(母體不同時看形狀);
-                 False 則比原始 count(母體相同時看逐 bin 重合)。
+        a, b: the two Samples to compare (convention: a=nano, b=tensor, but
+            the logic is symmetric).
+        names: subset of features to compare, None = all 74.
+        density: True normalizes each histogram to area=1 before comparing
+            (compares shape when the two populations differ in size);
+            False compares raw counts (compares bin-by-bin overlap when the
+            populations are the same size).
 
     Returns:
         {feature_name: {"max_abs_diff": float, "edges": np.ndarray,
                         "Na": np.ndarray, "Nb": np.ndarray}}
-
-    實作待辦(階段 2):
-        對每個 name:取共享 edges(binning.get_edges),各自 np.histogram,
-        (density 時正規化),算 max|Na - Nb|,收進結果 dict。
     """
 
     if names is None:
@@ -59,7 +61,8 @@ def compare_features(
 
 
 def compare_weights(direct: dict, poly: dict, *, operators=None) -> dict:
-    """per-event 比 direct vs poly。兩者須來自同一份 nano、逐 event 對齊。"""
+    """Compare direct vs poly weights per event. Both must come from the
+    same nano sample and be event-aligned."""
     if operators is None:
         operators = WC_NAMES
     results = {}

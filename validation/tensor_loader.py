@@ -1,16 +1,22 @@
 """
-tensor_loader.py — 從 train.p / test.p / validation.p 載入 tensor,回傳 Sample。
+tensor_loader.py — loads a tensor from train.p / test.p / validation.p and
+returns a Sample.
 
-tensor 內容(由 ml_data.py 產出、再經 random_split):
-  - features : (n_events, 74)  float64,column 順序見 schema.FEATURE_NAMES
-  - fit_coefs: (n_events, 153) float64,17 個 WC 二次型的上三角 packing
+Tensor contents (produced by ml_data.py, then passed through random_split):
+  - features : (n_events, 74)  float64, column order per schema.FEATURE_NAMES
+  - fit_coefs: (n_events, 153) float64, upper-triangle packing of the
+               17-WC quadratic form
 
-職責:
-  - features:用 schema.FEATURE_INDEX 把 74 個 column 切成 features dict。(直接切,不重算)
-  - weights :由 fit_coefs 多項式重建 SM + 16 operator 的 weight。(階段 3 才實作)
+Responsibilities:
+  - features: slice the 74 columns into a features dict using
+    schema.FEATURE_INDEX (a direct slice, no recomputation).
+  - weights : reconstruct SM + 16 operator weights from fit_coefs via the
+    polynomial fit.
 
-注意:這裡的 feature 是「直接讀 tensor 既有的值」,這正是受測對象之一,
-所以**不可**改用 ml_data 重算 — 那會讓 validator 失去獨立性。
+Note: the features here are read directly from the tensor's existing
+values — that's exactly what's under test, so this must **not** be swapped
+for a recompute via ml_data, which would make the validator lose its
+independence.
 """
 
 from typing import List, Optional
@@ -24,25 +30,23 @@ def load(
     with_weights: bool = False,
     wc_value: float = 1.0,
 ) -> Sample:
-    """載入一個或多個 .p 檔,合併成單一 Sample。
+    """Load one or more .p files, merged into a single Sample.
 
     Args:
-        paths: .p 檔路徑列表。可給多個(例如 train+test+val)以還原 split 前的全集;
-               histogram 對 shuffle 免疫,所以合併順序無所謂。
-        with_weights: 階段 2 設 False(只切 feature);階段 3 設 True 才重建 weight。
-        wc_value: 重建 BSM weight 時,operator 係數設的值(SM 項恆為 cSM=1)。
-                  注意這只影響 tensor 側重建,不對應任何實際 LHE reweight point,
-                  純粹用來看不同 WC 尺度下的 shape/sensitivity。
+        paths: list of .p file paths. Multiple paths (e.g. train+test+val)
+            can be given to reconstruct the full set prior to the split;
+            histograms are immune to shuffling, so merge order doesn't
+            matter.
+        with_weights: False to only slice features; True to also
+            reconstruct weights.
+        wc_value: the coefficient assigned to the operator when
+            reconstructing BSM weights (the SM term is always cSM=1).
+            Note this only affects the tensor-side reconstruction and
+            doesn't correspond to any actual LHE reweight point — it's
+            purely for inspecting shape/sensitivity at different WC scales.
 
     Returns:
-        Sample,符合 schema 契約。
-
-    實作待辦(階段 2):
-        1. torch.load 每個 path(weights_only=False),取 TensorDataset[:] 的 (feats, coefs)。
-        2. .float()? — 注意 tensor 原生 float64,先保留 float64 以利精度比較,勿降精度。
-        3. 沿第 0 軸 concat 多個檔。
-        4. 用 FEATURE_INDEX 切 72 column 成 features dict(np.ndarray)。
-        5. with_weights 時呼叫 _reconstruct_weights(coefs)(階段 3)。
+        A Sample satisfying the schema contract.
     """
 
     feats_list, coefs_list = [], []
@@ -66,33 +70,36 @@ def load(
 
 
 def _reconstruct_weights(coefs, *, wc_value: float = 1.0) -> dict:
-    """由 fit_coefs (n, 153) 多項式重建 SM + 16 operator 的 weight。
+    """Reconstruct SM + 16 operator weights from fit_coefs (n, 153) via the
+    polynomial fit.
 
-    對每個 WC 點 c(長度 17 的 SM-inclusive 向量),weight = coefs @ vec(outer(c, c))。
-    vec 是 153 維上三角 packing,off-diagonal 的 √2 / ×2 慣例必須與 ml_data 存檔時、
-    與 nano 重建時三邊一致(階段 3 開頭要先核這個慣例)。
+    For each WC point c (a length-17 SM-inclusive vector),
+    weight = coefs @ vec(outer(c, c)). vec is the 153-dim upper-triangle
+    packing; the off-diagonal √2 / ×2 convention must match across all
+    three sides — how ml_data saves it, and how the nano-side reconstruction
+    does it.
 
     Args:
-        wc_value: 指定 operator 的係數(SM 項恆為 cSM=1)。wc_value=1.0 時與
-                  nano 側的 direct/poly 比對點一致;其他值純粹是 tensor 側的
-                  外插檢視,無對應的 LHE reweight point。
+        wc_value: the coefficient assigned to the operator (the SM term is
+            always cSM=1). wc_value=1.0 matches the nano-side direct/poly
+            comparison point; any other value is purely a tensor-side
+            extrapolation view with no corresponding LHE reweight point.
     """
     import numpy as np
     from pretraining.fitCoefficients import vec, wcs as FIT_WCS
     n_wc = len(FIT_WCS) # 17
 
     def c_vector(op_name):
-        """建一個 SM-inclusive 的 WC 向量:cSM=1,指定 operator=wc_value,其餘 0。"""
+        """Build an SM-inclusive WC vector: cSM=1, the given operator=wc_value, rest 0."""
         c = np.zeros(n_wc)
-        c[FIT_WCS.index('cSM')] = 1.0          # 一律含 SM 項
-        if op_name != SM_NAME:              # SM 點就只有 cSM
-            c[FIT_WCS.index(op_name)] = wc_value  # 用 FIT_WCS 定位,不是 WC_NAMES!
+        c[FIT_WCS.index('cSM')] = 1.0          # always include the SM term
+        if op_name != SM_NAME:              # the SM point only has cSM
+            c[FIT_WCS.index(op_name)] = wc_value  # indexed via FIT_WCS, not WC_NAMES!
         return c
 
     weights = {}
-    for name in WC_NAMES:            # 直接傳 schema 名,不預先轉換
+    for name in WC_NAMES:            # pass schema names through directly, no pre-conversion
         c = c_vector(name)
         weights[name] = coefs @ vec(np.outer(c, c))
 
     return weights
-

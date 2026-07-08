@@ -137,7 +137,7 @@ def main():
         res_w = validator.compare_weights(w["direct"], w["poly"])
         for name in WC_NAMES:
             r    = res_w[name]
-            flag = "" if r["corr"] > 0.9999 else "  <-- 檢查"
+            flag = "" if r["corr"] > 0.9999 else "  <-- check"
             print(f"{name:10s} corr={r['corr']:.6f}  max|Δ|={r['max_abs_diff']:.3g}{flag}")
 
         os.makedirs(f"{output}/weight_verify", exist_ok=True)

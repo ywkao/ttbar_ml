@@ -1,8 +1,9 @@
 """
-utils.py — plotting / 呈現工具。
+utils.py — plotting / presentation helpers.
 
-把比較結果畫成圖。validator 算數字,utils 負責畫 — 兩者分開,
-這樣「比對邏輯」可以在無顯示環境單獨測試,畫圖是純呈現層。
+Turns comparison results into plots. validator computes the numbers, utils
+does the drawing — kept separate so the comparison logic can be tested on
+its own in a headless environment; plotting is a pure presentation layer.
 """
 
 from typing import Optional, Dict
@@ -13,10 +14,12 @@ from .schema import OPERATORS
 
 
 def _two_panel():
-    """開一個「上大下小 + 共用 x 軸」的雙 panel 畫布,回傳 (fig, ax_main, ax_ratio)。
+    """Open a two-panel canvas (big top + small bottom, shared x-axis),
+    returns (fig, ax_main, ax_ratio).
 
-    上 panel 放分布、下 panel 放 ratio。兩個 overlay 函式共用這個畫布,
-    所以 feature 軸(2 條)跟 weight 軸(17 條)畫出來長相一致。
+    The top panel holds the distributions, the bottom panel holds the
+    ratio. Both overlay functions share this canvas, so the feature-axis
+    plots (2 curves) and weight-axis plots (17 curves) look consistent.
     """
     import matplotlib.pyplot as plt
     fig, (ax1, ax2) = plt.subplots(
@@ -28,7 +31,8 @@ def _two_panel():
 
 
 def _finish(fig, name, outpath):
-    """存檔(有 outpath)或回傳 fig(無)。集中處理收尾,兩個函式共用。"""
+    """Save to disk (if outpath given) or return fig (if not). Centralizes
+    the wrap-up logic shared by both functions."""
     import matplotlib.pyplot as plt
     if outpath is not None:
         # fig.tight_layout() # UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
@@ -39,7 +43,8 @@ def _finish(fig, name, outpath):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 階段 2:feature 軸 — 同一個 feature,nano vs tensor 兩條,問「值算得一致嗎」。
+# feature axis — one feature, nano vs tensor as two curves, asking "do the
+# values agree?"
 # ─────────────────────────────────────────────────────────────────────────────
 def overlay(
     name: str,
@@ -51,25 +56,29 @@ def overlay(
     label_b: str = "tensor",
     outpath: Optional[str] = None,
 ):
-    """畫單一 feature 的 overlay(兩條 step histogram)+ 下方 ratio panel。
+    """Plot a single feature's overlay (two step histograms) plus a ratio
+    panel below.
 
     Args:
-        name: feature 名(標題 / 檔名)。
-        edges: 共享 bin edges。
-        Na, Nb: 兩邊的 histogram 高度(compare_features 已算好,同一組 edges)。
-        label_a, label_b: 圖例標籤。
-        outpath: 存檔路徑;None 則回傳 fig。
+        name: feature name (title / filename).
+        edges: shared bin edges.
+        Na, Nb: histogram heights for the two sides (already computed by
+            compare_features, on the same edges).
+        label_a, label_b: legend labels.
+        outpath: save path; None returns fig instead.
     """
     fig, ax1, ax2 = _two_panel()
 
-    # 上:兩條分布疊一起。stairs 用 edges 畫成階梯狀(histogram 的標準畫法)。
+    # top: both distributions overlaid. stairs draws them as step histograms
+    # using edges (the standard way to render a histogram).
     ax1.stairs(Na, edges, color="black",   linewidth=2.0, label=label_a)
     ax1.stairs(Nb, edges, color="crimson", linewidth=1.5, label=label_b, linestyle="--")
     ax1.set_ylabel("shape (normalised)")
     ax1.legend()
     ax1.set_title(name)
 
-    # 下:ratio = b / a。Na 為 0 的 bin 會除以 0,用 np.where 填 nan 跳過。
+    # bottom: ratio = b / a. bins where Na is 0 would divide by zero, so
+    # np.where fills those with nan instead.
     with np.errstate(divide="ignore", invalid="ignore"):
         ratio = np.where(Na > 0, Nb / Na, np.nan)
     ax2.stairs(ratio, edges, color="crimson", linewidth=1.5)
@@ -82,8 +91,8 @@ def overlay(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 階段 3 預備:weight 軸 — 同一個 feature 上 SM + 16 EFT 共 17 條 weighted 分布。
-# 這就是你心裡那張圖。資料來源不同(17 條 weighted hist),畫布同一個。
+# weight axis — on a single feature, SM + 16 EFT operators as 17 weighted
+# distributions sharing one canvas.
 # ─────────────────────────────────────────────────────────────────────────────
 def overlay_multi(
     name: str,
@@ -94,23 +103,22 @@ def overlay_multi(
     outpath: Optional[str] = None,
     ylabel_ratio: Optional[str] = r"$c_i = 1$ / SM",
 ):
-    """畫單一 feature 上 SM(粗黑)+ 16 EFT(細彩)的 overlay + 下方 BSM/SM ratio。
+    """Plot the overlay of SM (thick black) + 16 EFT operators (thin, colored)
+    on a single feature, plus a BSM/SM ratio panel below.
 
     Args:
-        name: feature 名。
-        edges: 共享 bin edges。
-        N_sm: SM 的 histogram 高度。
-        N_bsm: {operator_name: histogram 高度},共 16 條。
-        outpath: 存檔路徑;None 則回傳 fig。
-
-    註:這個函式階段 3 才會被餵真實資料(需要先做 weight 重建)。
-        現在先放著,當作你那張 EFT 圖的畫布。
+        name: feature name.
+        edges: shared bin edges.
+        N_sm: SM histogram heights.
+        N_bsm: {operator_name: histogram heights}, 16 curves.
+        outpath: save path; None returns fig instead.
     """
     import matplotlib.pyplot as plt
     fig, ax1, ax2 = _two_panel()
     cmap = plt.colormaps.get_cmap("tab20")
 
-    # 上:16 條 BSM 細線(彩),SM 粗黑線壓在最上面當基準。
+    # top: 16 thin colored BSM curves, with the thick black SM curve drawn
+    # on top as the reference.
     for i, (op, N) in enumerate(N_bsm.items()):
         ax1.stairs(N, edges, color=cmap(i % 20), linewidth=1.0, alpha=0.8, label=op)
     ax1.stairs(N_sm, edges, color="black", linewidth=2.0, label="SM", zorder=10)
@@ -118,7 +126,7 @@ def overlay_multi(
     ax1.legend(ncol=3, fontsize=9, loc="upper right")
     ax1.set_title(name)
 
-    # 下:每條 BSM 對 SM 的 ratio。
+    # bottom: each BSM curve's ratio to SM.
     for i, (op, N) in enumerate(N_bsm.items()):
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio = np.where(N_sm > 0, N / N_sm, np.nan)
@@ -132,8 +140,9 @@ def overlay_multi(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# (A) 驗證圖:direct vs poly 的 scatter — 把 compare_weights 的 corr 視覺化。
-# 點全落在 y=x 對角線 → 重建完美。離線的點就是重建出問題的 event。
+# (A) validation plot: direct vs poly scatter — visualizes compare_weights'
+# corr. Points all falling on the y=x diagonal means a perfect
+# reconstruction; off-diagonal points are the events where it broke.
 # ─────────────────────────────────────────────────────────────────────────────
 def weight_scatter(
     name: str,
@@ -144,19 +153,21 @@ def weight_scatter(
     max_n: int = 5000,
     outpath: Optional[str] = None,
 ):
-    """單一 WC 點:direct(x)vs poly(y)的逐 event scatter + y=x 對角線。
+    """One WC point: per-event scatter of direct (x) vs poly (y), plus the
+    y=x diagonal.
 
     Args:
-        name: WC 名(標題 / 檔名)。
-        w_direct, w_poly: 逐 event 對齊的兩套 weight,長度相同。
-        corr: 若給,標在標題上(從 compare_weights 拿)。
-        max_n: 最多畫幾個點(event 太多時隨機抽樣,免得圖太重)。
-        outpath: 存檔路徑;None 則回傳 fig。
+        name: WC name (title / filename).
+        w_direct, w_poly: the two event-aligned weight arrays, same length.
+        corr: if given, shown in the title (from compare_weights).
+        max_n: max points to plot (randomly subsampled when there are more
+            events than this, to keep the plot light).
+        outpath: save path; None returns fig instead.
     """
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(6, 6))
 
-    # event 太多就抽樣畫,不影響趨勢判讀
+    # subsample when there are too many events; doesn't affect the trend
     n = len(w_direct)
     if n > max_n:
         idx = np.random.default_rng(0).choice(n, max_n, replace=False)
@@ -166,7 +177,7 @@ def weight_scatter(
 
     ax.scatter(x, y, s=4, alpha=0.3, color="steelblue")
 
-    # y=x 對角線:點貼這條線 = 重建正確
+    # y=x diagonal: points on this line mean the reconstruction is correct
     lo = min(x.min(), y.min())
     hi = max(x.max(), y.max())
     ax.plot([lo, hi], [lo, hi], color="crimson", linewidth=1.0, linestyle="--", label="y = x")
@@ -182,7 +193,7 @@ def weight_scatter(
 
 
 def normalize_hists(N_sm, N_bsm, edges):
-    """各自除以積分(面積=1),回傳 normalized 版。"""
+    """Divide each by its integral (area = 1) and return the normalized versions."""
     widths = np.diff(edges)
     def norm(N):
         area = (N * widths).sum()

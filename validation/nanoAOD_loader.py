@@ -1,20 +1,27 @@
 """
-nanoAOD_loader.py — 從 NanoAOD root 檔獨立重算 features / weights,回傳 Sample。
+nanoAOD_loader.py — independently recomputes features / weights from a
+NanoAOD root file, returning a Sample.
 
-職責:
-  - selection:import 共享的 analysis_tools(genObjectSelection / genEventSelection),
-               **不可**抄 eft_sensitivity_scan.py 裡 local 那份 — selection 不一致是 noise,
-               必須與 ml_data 用同一份。
-  - features :獨立重算 74 個 feature(這是受測對象,必須與 tensor 側互不依賴)。
-               index 0-40 沿用既有邏輯;41-71 為新增(Tier 2 / Tier 1 / 3D 基底 / Tier 3)。
-  - weights  :對 SM + 16 operator 取 direct LHEWeight(階段 3)。
-               operator -> rwgt 欄位的對應參考 eft_sensitivity_scan.find_linear_rwgts。
+Responsibilities:
+  - selection: import the shared analysis_tools (genObjectSelection /
+               genEventSelection) — **must not** copy the local version in
+               eft_sensitivity_scan.py; a selection mismatch is noise, this
+               must use the same one as ml_data.
+  - features : independently recompute the 74 features (these are the
+               object under test, so must stay independent from the tensor
+               side). index 0-40 reuses existing logic; 41-71 are new
+               (Tier 2 / Tier 1 / 3D basis / Tier 3).
+  - weights  : take the direct LHEWeight for SM + 16 operators.
+               operator -> rwgt field mapping follows
+               eft_sensitivity_scan.find_linear_rwgts.
 
-設計選擇(階段 0 batch-mode 審計的結論):
-  train.p 是「多個 root merge 後再 random_split」的子集,且無 event id。
-  所以單一 root 的母體 != train.p 的母體,兩邊 histogram 只會「形狀相似」。
-  要嚴格重合,需載入與產生 train.p 同一批 root,並比 split 前全集。
-  介面因此設計成吃 List[str](多檔)。
+Design choice:
+  train.p is a subset of "multiple root files merged then random_split",
+  with no event id. So a single root file's population != train.p's
+  population — the two histograms will only be "similar in shape". Exact
+  agreement requires loading the same batch of root files used to produce
+  train.p and comparing against the full set before the split. The
+  interface is therefore designed to take a List[str] (multiple files).
 """
 
 from typing import List, Optional
@@ -98,23 +105,16 @@ def load(
     nevents: Optional[int] = None,
     with_weights: bool = False,
 ) -> Sample:
-    """載入一個或多個 root 檔,回傳 Sample。
+    """Load one or more root files, returning a Sample.
 
     Args:
-        files: NanoAOD root 檔路徑列表。
-        nevents: 每檔最多取前 N 個 event(debug 用,None = 全部)。
-        with_weights: 階段 2 設 False;階段 3 設 True 才取 direct LHEWeight。
+        files: list of NanoAOD root file paths.
+        nevents: max events to take from the front of each file (for
+            debugging; None = all events).
+        with_weights: True to also take the direct LHEWeight.
 
     Returns:
-        Sample,符合 schema 契約。
-
-    實作待辦(階段 2):
-        1. NanoEventsFactory.from_root 載入,選擇性截 nevents。
-        2. 共享 selection:cleanleps, cleanjets = genObjectSelection(events);
-           mask = genEventSelection(...)。
-        3. 重算 72 個 feature 成 features dict(np.ndarray)。
-        4. with_weights 時呼叫 _direct_weights(events, mask)(階段 3)。
-        5. 多檔則各自處理後沿第 0 軸 concat。
+        A Sample satisfying the schema contract.
     """
 
     # FILE = "/eos/uscms/store/user/honor/TTbarSemileptonic/modCentral/251114_001833/0000/nanogen_modCentral_1.root"
@@ -141,10 +141,11 @@ def load(
         t_gp    = ak.pad_none(gp[is_final & (gp.pdgId ==  6)], 1)[:, 0]
         tbar_gp = ak.pad_none(gp[is_final & (gp.pdgId == -6)], 1)[:, 0]
 
-        ### # 放在 line 139 gp = events.GenPart[mask] 之後
+        ### # place after gp = events.GenPart[mask]
         ### par = ak.fill_none(abs(gp.distinctParent.pdgId), 0)
         ### has_hadtau = ak.to_numpy(ak.any((abs(gp.pdgId) == 15) & (par == 24), axis=1))
-        ### # 注意:這會把 tau->e/mu 也砍掉;gen-level validation 用這個粗粒度通常可接受
+        ### # note: this also cuts tau->e/mu; this coarse granularity is usually
+        ### # acceptable for gen-level validation
 
         def to_np(arr):
             return ak.to_numpy(ak.fill_none(arr, 0.)).astype(float)
@@ -266,7 +267,7 @@ def load(
         print(f"[DEBUG] bad_lep.sum() = {bad_lep.sum()}, bad_had.sum() = {bad_had.sum()}")
 
         bad_idx = np.where(bad_had)[0]
-        print(f"[DEBUG] down_e[bad_idx][:10] = {down_e[bad_idx][:10]}")          # 確認是 0-padding
+        print(f"[DEBUG] down_e[bad_idx][:10] = {down_e[bad_idx][:10]}")          # confirm it's 0-padding
 
         # --- debug 2: classify the 99 bad events --- #
         gpb = gp[bad_idx]
@@ -275,7 +276,7 @@ def load(
         has_tau  = ak.to_numpy(ak.any((abs(gpb.pdgId) == 15) & (parid == 24), axis=1))
         has_bW   = ak.to_numpy(ak.any((abs(gpb.pdgId) == 5)  & (parid == 24)
                                       & gpb.hasFlags(["fromHardProcess"]), axis=1))
-        # d/s 存在且過了 is_final,但 distinctParent 追不到 W
+        # d/s exists and passes is_final, but distinctParent can't trace back to W
         isf  = gpb.hasFlags(["fromHardProcess", "isLastCopy"])
         ds   = isf & ((abs(gpb.pdgId) == 1) | (abs(gpb.pdgId) == 3))
         has_orphan = ak.to_numpy(ak.any(ds, axis=1)) & ~ak.to_numpy(ak.any(ds & (parid == 24), axis=1))
@@ -287,7 +288,7 @@ def load(
         dsq = gpb[ds]
         print("[DEBUG] orphan d/s parent pdgId:", ak.flatten(ak.fill_none(dsq.distinctParent.pdgId, 0)).tolist()[:20])
 
-        # 印一個 "other" event 的完整衰變記錄看看
+        # print one "other" event's full decay record to inspect
         rest = bad_idx[~(has_tau | has_bW | has_orphan)]
         if len(rest):
             g0 = gp[rest[0]]
@@ -421,9 +422,11 @@ def load(
 
 
 def load_weights(files, *, nevents=None):
-    """weight 軸專用:在同一份 nano 上產出逐 event 對齊的 direct & poly weight。
-    回傳 {"direct": {...17...}, "poly": {...17...}},兩者 per-event 對齊。
-    不走 Sample 契約(weight 軸是 source 內比較,跟 feature 的跨 source 不同)。
+    """Weight-axis only: produces event-aligned direct & poly weights on the
+    same nano sample. Returns {"direct": {...17...}, "poly": {...17...}},
+    with the two per-event aligned. Doesn't go through the Sample contract
+    (the weight axis is an intra-source comparison, unlike the feature
+    axis's cross-source comparison).
     """
     direct_per_file, poly_per_file = [], []
     for f in files:
@@ -442,10 +445,11 @@ def load_weights(files, *, nevents=None):
 
 
 def _direct_weights(events, mask) -> dict:
-    """對 SM + 16 operator 取 direct LHEWeight,回傳 weights dict。
+    """Take the direct LHEWeight for SM + 16 operators, return a weights dict.
 
     - SM    : events.LHEWeight["sm_point"][mask]
-    - op_i  : events.LHEWeight[rwgt_field_i][mask],rwgt_field 由 find_linear_rwgts 解析。
+    - op_i  : events.LHEWeight[rwgt_field_i][mask], rwgt_field resolved by
+              find_linear_rwgts.
     """
 
     def find_linear_rwgts(events):
@@ -485,15 +489,17 @@ def _direct_weights(events, mask) -> dict:
         for op in OPERATORS
     }
 
-    weights = {SM_NAME: w_sm}      # 先放 SM
-    weights.update(w_bsm_dict)     # 再併入 16 個 operator
+    weights = {SM_NAME: w_sm}      # SM first
+    weights.update(w_bsm_dict)     # then merge in the 16 operators
 
     return weights
 
 def _poly_weights(events, mask) -> dict:
     """
-    對 SM + 16 operator,在 nano 上用 calculate_fit 解係數再多項式重建 poly weight。
-    回傳 {WC_NAMES: (n_sel,) poly weight}。與 _direct_weights 逐 event 對齊,供 compare_weights 比對。
+    For SM + 16 operators, use calculate_fit on the nano sample to solve for
+    the coefficients, then reconstruct the poly weight via the polynomial.
+    Returns {WC_NAMES: (n_sel,) poly weight}, event-aligned with
+    _direct_weights for compare_weights to use.
     """
 
     from pretraining.fitCoefficients import calculate_fit, vec, wcs as FIT_WCS
@@ -513,15 +519,15 @@ def _poly_weights(events, mask) -> dict:
     n_wc = len(FIT_WCS) # 17
 
     def c_vector(op_name):
-        """建一個 SM-inclusive 的 WC 向量:cSM=1,指定 operator=1,其餘 0。"""
+        """Build an SM-inclusive WC vector: cSM=1, the given operator=1, rest 0."""
         c = np.zeros(n_wc)
-        c[FIT_WCS.index('cSM')] = 1.0          # 一律含 SM 項
-        if op_name != SM_NAME:              # SM 點就只有 cSM
-            c[FIT_WCS.index(op_name)] = 1.0    # 用 FIT_WCS 定位,不是 WC_NAMES!
+        c[FIT_WCS.index('cSM')] = 1.0          # always include the SM term
+        if op_name != SM_NAME:              # the SM point only has cSM
+            c[FIT_WCS.index(op_name)] = 1.0    # indexed via FIT_WCS, not WC_NAMES!
         return c
 
     weights = {}
-    for name in WC_NAMES:            # 直接傳 schema 名,不預先轉換
+    for name in WC_NAMES:            # pass schema names through directly, no pre-conversion
         c = c_vector(name)
         weights[name] = coefs @ vec(np.outer(c, c))
 

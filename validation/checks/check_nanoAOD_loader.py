@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-# 這個檔 -> checks/ -> validation/ -> ttbar_ml/  (往上 3 個 parent)
+# this file -> checks/ -> validation/ -> ttbar_ml/  (3 parents up)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 print(f"check: {PROJECT_ROOT}")
