@@ -113,8 +113,8 @@ def main():
 
     # ── Block 3: EFT overlay plots from tensor ──
     if args.eft_overlay:
-        outdir = (f"{output}/eft_overlay_tensor_norm{wc_suffix}" if args.normalized
-                  else f"{output}/eft_overlay_tensor{wc_suffix}")
+        outdir = (f"{output}/eft_overlay_tensor_norm" if args.normalized
+                  else f"{output}/eft_overlay_tensor")
         ylabel_ratio = ("(normalized EFT)/(normalized SM)" if args.normalized
                         else rf"$c_i = {args.wc_value:g}$ / SM")
         os.makedirs(outdir, exist_ok=True)
@@ -128,8 +128,9 @@ def main():
             }
             if args.normalized:
                 N_sm, N_bsm = utils.normalize_hists(N_sm, N_bsm, edges)
+            suffix = wc_suffix if wc_suffix else "_wc1"
             utils.overlay_multi(fname, edges, N_sm, N_bsm,
-                                outpath=f"{outdir}/{fname}.png", ylabel_ratio=ylabel_ratio)
+                                outpath=f"{outdir}/{fname}{suffix}.png", ylabel_ratio=ylabel_ratio)
 
     # ── Block 4: nano weight validation (direct vs poly) + EFT overlay ──
     if args.nano_weights:
