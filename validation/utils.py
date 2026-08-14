@@ -30,6 +30,30 @@ def _two_panel():
     return fig, ax1, ax2
 
 
+def style_axes(ax_top, ax_bottom):
+    """Apply shared tick/grid/locator styling to a top+bottom panel pair.
+
+    Ticks on all four sides (major+minor, inward), faint dashed/dotted grid,
+    and auto locators so this works unmodified across variables with wildly
+    different ranges/units. Top panel keeps its tick marks but hides labels
+    since it shares the x-axis with the bottom panel.
+    """
+    from matplotlib.ticker import AutoLocator, AutoMinorLocator
+    for ax in (ax_top, ax_bottom):
+        ax.minorticks_on()
+        ax.tick_params(which='both', direction='in', top=True, right=True)
+        ax.tick_params(which='major', length=6)
+        ax.tick_params(which='minor', length=3)
+        ax.grid(which='major', linestyle='--', linewidth=0.5, alpha=0.4)
+        ax.grid(which='minor', linestyle=':', linewidth=0.3, alpha=0.2)
+        ax.set_axisbelow(True)
+        ax.xaxis.set_major_locator(AutoLocator())
+        ax.xaxis.set_minor_locator(AutoMinorLocator(5))
+        ax.yaxis.set_major_locator(AutoLocator())
+        ax.yaxis.set_minor_locator(AutoMinorLocator(5))
+    ax_top.tick_params(labelbottom=False)
+
+
 def _finish(fig, name, outpath):
     """Save to disk (if outpath given) or return fig (if not). Centralizes
     the wrap-up logic shared by both functions."""
@@ -135,6 +159,8 @@ def overlay_multi(
     ax2.set_ylabel(ylabel_ratio)
     ax2.set_xlabel(name)
     ax2.set_ylim(0, 4)
+
+    style_axes(ax1, ax2)
 
     return _finish(fig, name, outpath)
 
