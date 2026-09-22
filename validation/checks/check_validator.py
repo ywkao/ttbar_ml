@@ -150,6 +150,14 @@ def main():
             )
         print("done, 17 scatter plots (A)")
 
+        os.makedirs(f"{output}/weight_hist", exist_ok=True)
+        for name in WC_NAMES:
+            utils.weight_hist(
+                name, w["direct"][name], w["poly"][name],
+                outpath=f"{output}/weight_hist/{name}.png",
+            )
+        print("done, 17 weight-value histograms (B)")
+
         os.makedirs(f"{output}/eft_overlay", exist_ok=True)
         for fname in nano["features"]:
             edges = get_edges(fname)
@@ -161,7 +169,7 @@ def main():
             }
             utils.overlay_multi(fname, edges, N_sm, N_bsm,
                                 outpath=f"{output}/eft_overlay/{fname}.png")
-        print(f"done, {len(FEATURE_NAMES)} EFT overlay plots (B)")
+        print(f"done, {len(FEATURE_NAMES)} EFT overlay plots (C)")
 
 
 if __name__ == "__main__":

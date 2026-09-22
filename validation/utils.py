@@ -218,6 +218,58 @@ def weight_scatter(
     return _finish(fig, name, outpath)
 
 
+def weight_hist(
+    name: str,
+    w_direct: np.ndarray,
+    w_poly: np.ndarray,
+    *,
+    bins: int = 60,
+    outpath: Optional[str] = None,
+):
+    """One WC point: 1D histogram of the weight *values* themselves (direct
+    vs poly), not of a kinematic feature. Complements weight_scatter — a
+    long tail or a negative-weight population is easy to miss in a scatter
+    plot but jumps out here.
+
+    Args:
+        name: WC name (title / filename).
+        w_direct, w_poly: the two weight arrays (need not be same length).
+        bins: number of histogram bins.
+        outpath: save path; None returns fig instead.
+    """
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(6, 4))
+
+    # clip range to the 0.5-99.5 percentile band so a handful of outliers
+    # don't blow up the binning; log y-scale keeps the bulk and the tail
+    # both visible.
+    lo = min(np.percentile(w_direct, 0.5), np.percentile(w_poly, 0.5))
+    hi = max(np.percentile(w_direct, 99.5), np.percentile(w_poly, 99.5))
+    edges = np.linspace(lo, hi, bins + 1)
+
+    Nd, _ = np.histogram(w_direct, bins=edges)
+    Np, _ = np.histogram(w_poly, bins=edges)
+
+    # np.histogram silently drops values outside [lo, hi] (no over/underflow
+    # bin), which would otherwise hide exactly the outliers this plot exists
+    # to catch — so count and annotate them instead.
+    n_under = int((w_direct < lo).sum() + (w_poly < lo).sum())
+    n_over  = int((w_direct > hi).sum() + (w_poly > hi).sum())
+
+    ax.stairs(Nd, edges, color="black", linewidth=2.0, label="direct")
+    ax.stairs(Np, edges, color="crimson", linewidth=1.5, linestyle="--", label="poly")
+    ax.set_yscale("log")
+    ax.set_xlabel("weight value")
+    ax.set_ylabel("events")
+    ax.set_title(name)
+    ax.legend()
+    if n_under or n_over:
+        ax.text(0.02, 0.02, f"underflow={n_under}  overflow={n_over}",
+                transform=ax.transAxes, fontsize=8, color="grey")
+
+    return _finish(fig, name, outpath)
+
+
 def normalize_hists(N_sm, N_bsm, edges):
     """Divide each by its integral (area = 1) and return the normalized versions."""
     widths = np.diff(edges)

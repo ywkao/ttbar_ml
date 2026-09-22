@@ -399,6 +399,10 @@ def load(
         }
 
         _weights  = _direct_weights(events, mask) if with_weights else {}
+        if with_weights:
+            w_tot = float(ak.sum(events.LHEWeight[SM_NAME]))
+            w_sel = float(_weights[SM_NAME].sum())
+            print(f"Yield: {w_sel:.6g} / {w_tot:.6g} = {w_sel / w_tot:.4f}")
 
         per_file.append(_feats)
         per_file_w.append(_weights)
